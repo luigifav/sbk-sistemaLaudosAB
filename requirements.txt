@@ -1,6 +1,6 @@
-psycopg2-binary==2.9.9
-Pillow==10.3.0
-reportlab==4.1.0
+psycopg2-binary==2.9.10
+Pillow==11.0.0
+reportlab==4.2.5
 flask
 gunicorn
 python-dotenv
