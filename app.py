@@ -1007,7 +1007,13 @@ def api_post_reimportar():
 # ─────────────────────────────────────────────
 # INICIALIZAÇÃO
 # ─────────────────────────────────────────────
-criar_tabelas()
+try:
+    criar_tabelas()
+except Exception as _e:
+    import sys
+    print(f"AVISO: falha ao inicializar tabelas no boot ({_e}). "
+          "Workers continuarão; nova tentativa será feita sob demanda.",
+          file=sys.stderr)
 
 
 if __name__ == "__main__":
