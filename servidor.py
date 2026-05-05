@@ -11,6 +11,7 @@ import os
 import hashlib
 import re
 import sqlite3
+import storage
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
@@ -331,12 +332,19 @@ class Handler(BaseHTTPRequestHandler):
         conn.close()
         if not row:
             return json_resp(self, 404, {"erro": "Anexo nao encontrado"})
-        if os.path.exists(row["caminho"]):
-            with open(row["caminho"], "rb") as f:
-                dados = f.read()
-        elif row["conteudo"]:
-            dados = bytes(row["conteudo"])
+        caminho = row["caminho"] or ""
+        dados = None
+        if caminho.startswith("/"):
+            if os.path.exists(caminho):
+                with open(caminho, "rb") as f:
+                    dados = f.read()
+            elif row["conteudo"]:
+                dados = bytes(row["conteudo"])
         else:
+            dados = storage.download_arquivo(caminho)
+            if dados is None and row["conteudo"]:
+                dados = bytes(row["conteudo"])
+        if not dados:
             return json_resp(self, 404, {"erro": "Anexo nao encontrado"})
         tipo = row["tipo"] or "application/octet-stream"
         self.send_response(200)
@@ -372,17 +380,15 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
             return json_resp(self, 400, {"erro": f"Erro ao decodificar: {e}"})
 
-        # Salvar arquivo
-        ext = ".png" if "png" in tipo else ".jpg" if "jp" in tipo else ".pdf"
-        nome_arquivo = f"{numero.replace('/', '_')}_{app_id}_{_uuid.uuid4().hex[:8]}{ext}"
-        caminho = os.path.join(ANEXOS_DIR, nome_arquivo)
-        with open(caminho, "wb") as f:
-            f.write(raw)
+        # Gerar chave e fazer upload (R2 ou fallback local)
+        ext = "png" if "png" in tipo else "jpg" if "jp" in tipo else "pdf"
+        chave = f"{proc['id']}/{app_id}/{_uuid.uuid4().hex}.{ext}"
+        storage.upload_arquivo(chave, raw, tipo)
 
-        # Registrar no banco (conteudo salvo como BLOB para persistir em ambientes efêmeros)
+        # Registrar no banco (somente a chave; conteudo BLOB não é mais salvo)
         cur = conn.execute(
             "INSERT INTO anexos (processo_id, app_id, nome, tipo, caminho, conteudo, dt_criacao) VALUES (?,?,?,?,?,?,?)",
-            [proc["id"], app_id, nome, tipo, caminho, raw, agora()]
+            [proc["id"], app_id, nome, tipo, chave, None, agora()]
         )
         anexo_id = cur.lastrowid
         conn.commit()
@@ -394,7 +400,7 @@ class Handler(BaseHTTPRequestHandler):
         conn = conectar()
         row = conn.execute("SELECT caminho FROM anexos WHERE id=?", [anexo_id]).fetchone()
         if row:
-            try: os.unlink(row["caminho"])
+            try: storage.deletar_arquivo(row["caminho"])
             except: pass
             conn.execute("DELETE FROM anexos WHERE id=?", [anexo_id])
             conn.commit()
