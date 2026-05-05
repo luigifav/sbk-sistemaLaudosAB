@@ -3,3 +3,4 @@ Pillow==10.3.0
 reportlab==4.1.0
 flask
 gunicorn
+python-dotenv

@@ -2,7 +2,19 @@
 app.py — Sistema de Laudos SBK (Flask + Gunicorn)
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
+import sys
+
+if "DATABASE_URL" not in os.environ:
+    print("ERRO: DATABASE_URL nao configurado")
+    sys.exit(1)
+
+if "SECRET_KEY" not in os.environ:
+    print("AVISO: SECRET_KEY nao configurado, usando chave temporaria insegura")
+
 import io
 import re
 import json
