@@ -1287,16 +1287,62 @@ textarea{min-height:100px;resize:vertical}
 
 <script>
 // ─────────────────────────────────────────────
+// AUTH — token JWT
+// ─────────────────────────────────────────────
+const SBK_TOKEN_KEY = 'sbk_token';
+
+function getToken(){
+  try { return localStorage.getItem(SBK_TOKEN_KEY) || ''; }
+  catch(_){ return ''; }
+}
+
+function decodeToken(token){
+  try {
+    const parts = token.split('.');
+    if(parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+    if(payload.exp && Date.now() / 1000 > payload.exp) return null;
+    return payload;
+  } catch(_){ return null; }
+}
+
+function tratarNaoAutorizado(){
+  try {
+    localStorage.removeItem(SBK_TOKEN_KEY);
+    localStorage.removeItem(SL_SESSAO_KEY);
+    localStorage.removeItem(SL_ESTADO_KEY);
+  } catch(_){}
+  const tLogin = document.getElementById('login');
+  const tDash  = document.getElementById('dashboard');
+  if(tDash)  tDash.style.display  = 'none';
+  if(tLogin) tLogin.style.display = 'flex';
+}
+
+async function fetchAuth(url, options){
+  options = options || {};
+  const headers = new Headers(options.headers || {});
+  const token = getToken();
+  if(token) headers.set('Authorization', 'Bearer ' + token);
+  options.headers = headers;
+  const resp = await fetch(url, options);
+  if(resp.status === 401){
+    tratarNaoAutorizado();
+    throw new Error('Não autorizado');
+  }
+  return resp;
+}
+
+// ─────────────────────────────────────────────
 // API — todas as chamadas ao servidor Python
 // ─────────────────────────────────────────────
 const API = {
   async get(path){
-    const r = await fetch('/api' + path);
+    const r = await fetchAuth('/api' + path);
     if(!r.ok) throw new Error(await r.text());
     return r.json();
   },
   async post(path, body){
-    const r = await fetch('/api' + path, {
+    const r = await fetchAuth('/api' + path, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body)
@@ -1348,6 +1394,9 @@ async function loginSistema(){
   try {
     const res = await API.post('/login', { login: u, senha: s });
     if(res.ok){
+      if(res.token){
+        try { localStorage.setItem(SBK_TOKEN_KEY, res.token); } catch(_){}
+      }
       usuarioLogado = res.login;
       nomeLogado    = res.nome;
       salvarSessao(res.login, res.nome, res.admin || false);
@@ -1380,6 +1429,7 @@ document.addEventListener("keydown", ev => {
 });
 
 function logout(){
+  try { localStorage.removeItem(SBK_TOKEN_KEY); } catch(_){}
   limparSessao();
   usuarioAdmin = false;
   const ba = document.getElementById('btn-admin');
@@ -2079,7 +2129,7 @@ async function salvarEGerarLaudo(){
     dados.anexos_ids = anexosIds;
 
     // 4. Chamar endpoint de geração do laudo
-    const resp = await fetch('/api/processos/' + encodeURIComponent(processoAtual.processo) + '/gerar-laudo', {
+    const resp = await fetchAuth('/api/processos/' + encodeURIComponent(processoAtual.processo) + '/gerar-laudo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ usuario: usuarioLogado, ...dados })
@@ -2447,7 +2497,7 @@ async function ccBaixarLaudo(numero, btn){
 
     // Se ja tem PDF salvo, baixa direto sem regerar
     if(proc.caminho_pdf){
-      const respPdf = await fetch('/api/processos/' + encodeURIComponent(numero) + '/pdf');
+      const respPdf = await fetchAuth('/api/processos/' + encodeURIComponent(numero) + '/pdf');
       if(respPdf.ok){
         const blob = await respPdf.blob();
         const url  = URL.createObjectURL(blob);
@@ -2485,7 +2535,7 @@ async function ccBaixarLaudo(numero, btn){
       canal: ct.canal || '',
     }));
 
-    const resp = await fetch('/api/processos/' + encodeURIComponent(numero) + '/gerar-laudo', {
+    const resp = await fetchAuth('/api/processos/' + encodeURIComponent(numero) + '/gerar-laudo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ usuario: usuarioLogado, ...proc, contratos, anexos_ids })
@@ -2650,7 +2700,7 @@ async function importarCasos(){
     const fileCont = document.getElementById('file-importar-contratos').files[0];
     if(fileCont) formData.append('contratos', fileCont);
 
-    const resp = await fetch('/api/importar-casos', {
+    const resp = await fetchAuth('/api/importar-casos', {
       method: 'POST',
       body: formData
     });
@@ -3032,15 +3082,15 @@ function restaurarEstadoUI(){
 
 async function tentarRestaurarSessao(){
   try {
-    const raw = localStorage.getItem(SL_SESSAO_KEY);
-    if(!raw) return;
-    const sessao = JSON.parse(raw);
-    if(!sessao.login || (Date.now() - sessao.ts) > SL_TTL_MS){
+    const token = getToken();
+    if(!token) return;
+    const payload = decodeToken(token);
+    if(!payload){
+      try { localStorage.removeItem(SBK_TOKEN_KEY); } catch(_){}
       limparSessao();
       return;
     }
-    const res = await API.get('/validar-sessao?login=' + encodeURIComponent(sessao.login));
-    if(!res.ok){ limparSessao(); return; }
+    const res = { ok: true, login: payload.login, nome: payload.nome, admin: !!payload.admin };
 
     usuarioLogado = res.login;
     nomeLogado    = res.nome;
