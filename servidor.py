@@ -27,7 +27,18 @@ if USE_POSTGRES:
     class _PGConn:
         """Wrapper que emula a interface do sqlite3 para o PostgreSQL."""
         def __init__(self, dsn):
-            self._conn = psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                self._conn = psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
+            except psycopg2.OperationalError as e:
+                msg = str(e)
+                if "Network is unreachable" in msg or "could not connect" in msg:
+                    dsn_ipv4 = _resolver_dsn_ipv4(dsn)
+                    if dsn_ipv4 != dsn:
+                        self._conn = psycopg2.connect(dsn_ipv4, cursor_factory=psycopg2.extras.RealDictCursor)
+                    else:
+                        raise
+                else:
+                    raise
             self._conn.autocommit = False
 
         def execute(self, sql, params=None):
@@ -115,6 +126,37 @@ def conectar():
     conn = sqlite3.connect(DB_ARQUIVO)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _resolver_dsn_ipv4(dsn: str) -> str:
+    """Se o ambiente não tem rota IPv6, tenta resolver o host para um A record IPv4.
+    Mantém o DSN original se não houver IPv4 disponível."""
+    import socket
+    from urllib.parse import urlparse, urlunparse
+    try:
+        u = urlparse(dsn)
+        if not u.hostname:
+            return dsn
+        infos = socket.getaddrinfo(u.hostname, u.port or 5432, socket.AF_INET)
+        if not infos:
+            return dsn
+        ipv4 = infos[0][4][0]
+        userinfo = ""
+        if u.username:
+            userinfo = u.username
+            if u.password:
+                userinfo += f":{u.password}"
+            userinfo += "@"
+        netloc = f"{userinfo}{ipv4}:{u.port or 5432}"
+        novo = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
+        # PostgreSQL exige sslmode quando o host vira IP literal sem hostname-match;
+        # adiciona sslmode=require se ausente.
+        if "sslmode=" not in (u.query or ""):
+            sep = "&" if u.query else "?"
+            novo = f"{novo}{sep}sslmode=require"
+        return novo
+    except Exception:
+        return dsn
 
 
 def criar_tabelas():
