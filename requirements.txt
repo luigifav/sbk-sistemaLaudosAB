@@ -4,3 +4,4 @@ reportlab==4.1.0
 flask
 gunicorn
 boto3
+PyJWT==2.8.0
