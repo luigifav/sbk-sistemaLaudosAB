@@ -22,9 +22,12 @@ import sqlite3
 import hashlib
 import base64
 import uuid
+import secrets
 import importlib.util
+from functools import wraps
 from datetime import datetime, timedelta
 
+import jwt
 from flask import Flask, request, jsonify, send_from_directory, send_file, Response, abort
 
 from servidor import (
@@ -40,6 +43,46 @@ from servidor import (
 )
 
 app = Flask(__name__)
+
+
+# ─────────────────────────────────────────────
+# JWT / AUTENTICAÇÃO
+# ─────────────────────────────────────────────
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    print("AVISO: SECRET_KEY não definida no ambiente. Usando valor temporário (apenas para desenvolvimento).")
+    SECRET_KEY = secrets.token_hex(32)
+
+JWT_ALGO = "HS256"
+JWT_EXP_HOURS = 8
+
+
+def gerar_token(login, nome, admin):
+    payload = {
+        "login": login,
+        "nome": nome,
+        "admin": bool(admin),
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGO)
+
+
+def requer_auth(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return json_response({"erro": "Não autorizado"}, 401)
+        token = auth[7:].strip()
+        if not token:
+            return json_response({"erro": "Não autorizado"}, 401)
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGO])
+        except jwt.PyJWTError:
+            return json_response({"erro": "Não autorizado"}, 401)
+        request.usuario_jwt = payload
+        return func(*args, **kwargs)
+    return wrapper
 
 
 # ─────────────────────────────────────────────
@@ -112,6 +155,7 @@ def static_files(filename):
 # ROTAS API — GET
 # ─────────────────────────────────────────────
 @app.route("/api/contadores", methods=["GET"])
+@requer_auth
 def api_contadores():
     try:
         conn_lp = conectar()
@@ -141,6 +185,7 @@ def api_contadores():
 
 
 @app.route("/api/processos", methods=["GET"])
+@requer_auth
 def api_get_processos():
     qs = request.args
     status = qs.get("status")
@@ -190,6 +235,7 @@ def api_get_processos():
 
 
 @app.route("/api/processos/<path:numero>/pdf", methods=["GET"])
+@requer_auth
 def api_get_pdf(numero):
     conn = conectar()
     proc = conn.execute(
@@ -213,6 +259,7 @@ def api_get_pdf(numero):
 
 
 @app.route("/api/processos/<path:numero>/anexos", methods=["GET"])
+@requer_auth
 def api_get_anexos(numero):
     conn = conectar()
     proc = conn.execute("SELECT id FROM processos WHERE processo=?", [numero]).fetchone()
@@ -228,6 +275,7 @@ def api_get_anexos(numero):
 
 
 @app.route("/api/processos/<path:numero>", methods=["GET"])
+@requer_auth
 def api_get_processo(numero):
     conn = conectar()
     proc = conn.execute("SELECT * FROM processos WHERE processo = ?", [numero]).fetchone()
@@ -256,24 +304,8 @@ def api_get_processo(numero):
     })
 
 
-@app.route("/api/validar-sessao", methods=["GET"])
-def api_validar_sessao():
-    login = (request.args.get("login") or "").strip()
-    if not login:
-        return json_response({"ok": False, "erro": "Login obrigatório"}, 400)
-    conn = conectar()
-    user = conn.execute(
-        "SELECT login, nome, admin FROM usuarios WHERE login=? AND ativo=1",
-        [login]
-    ).fetchone()
-    conn.close()
-    if user:
-        return json_response({"ok": True, "nome": user["nome"],
-                              "login": user["login"], "admin": bool(user["admin"])})
-    return json_response({"ok": False})
-
-
 @app.route("/api/aguardando", methods=["GET"])
+@requer_auth
 def api_aguardando():
     qs = request.args
     busca = qs.get("q")
@@ -305,6 +337,7 @@ def api_aguardando():
 
 
 @app.route("/api/analistas", methods=["GET"])
+@requer_auth
 def api_analistas():
     conn = conectar()
     rows = conn.execute(
@@ -317,6 +350,7 @@ def api_analistas():
 
 
 @app.route("/api/admin/usuarios", methods=["GET"])
+@requer_auth
 def api_get_usuarios():
     conn = conectar()
     rows = conn.execute(
@@ -327,6 +361,7 @@ def api_get_usuarios():
 
 
 @app.route("/api/relatorios/produtividade", methods=["GET"])
+@requer_auth
 def api_relatorio_produtividade():
     conn = conectar()
     rows = conn.execute(
@@ -341,6 +376,7 @@ def api_relatorio_produtividade():
 
 
 @app.route("/api/relatorios/faturamento", methods=["GET"])
+@requer_auth
 def api_relatorio_faturamento():
     conn = conectar()
     rows = conn.execute(
@@ -355,6 +391,7 @@ def api_relatorio_faturamento():
 
 
 @app.route("/api/anexos/<int:anexo_id>", methods=["GET"])
+@requer_auth
 def api_get_anexo_arquivo(anexo_id):
     conn = conectar()
     row = conn.execute(
@@ -396,12 +433,15 @@ def api_login():
     ).fetchone()
     conn.close()
     if user and user["senha_hash"] == hashlib.sha256(senha.encode()).hexdigest():
+        token = gerar_token(login, user["nome"], user["admin"])
         return json_response({"ok": True, "nome": user["nome"],
-                              "login": login, "admin": bool(user["admin"])})
+                              "login": login, "admin": bool(user["admin"]),
+                              "token": token})
     return json_response({"ok": False, "erro": "Usuário ou senha inválidos"}, 401)
 
 
 @app.route("/api/processos", methods=["POST"])
+@requer_auth
 def api_post_processo():
     body = get_body()
     numero = (body.get("processo") or "").strip()
@@ -427,6 +467,7 @@ def api_post_processo():
 
 
 @app.route("/api/importar-casos", methods=["POST"])
+@requer_auth
 def api_importar_casos():
     try:
         import openpyxl
@@ -539,6 +580,7 @@ def api_importar_casos():
 
 
 @app.route("/api/processos/<path:numero>/status", methods=["POST"])
+@requer_auth
 def api_post_status(numero):
     body = get_body()
     novo = body.get("status")
@@ -567,6 +609,7 @@ def api_post_status(numero):
 
 
 @app.route("/api/processos/<path:numero>/laudo", methods=["POST"])
+@requer_auth
 def api_post_laudo(numero):
     body = get_body()
     usuario = body.get("usuario", "sistema")
@@ -625,6 +668,7 @@ def api_post_laudo(numero):
 
 
 @app.route("/api/processos/<path:numero>/liberar", methods=["POST"])
+@requer_auth
 def api_post_liberar(numero):
     conn = conectar()
     proc = conn.execute("SELECT id FROM processos WHERE processo = ?", [numero]).fetchone()
@@ -641,6 +685,7 @@ def api_post_liberar(numero):
 
 
 @app.route("/api/processos/<path:numero>/gerar-laudo", methods=["POST"])
+@requer_auth
 def api_post_gerar_laudo(numero):
     body = get_body()
 
@@ -765,6 +810,7 @@ def api_post_gerar_laudo(numero):
 
 
 @app.route("/api/processos/<path:numero>/mover", methods=["POST"])
+@requer_auth
 def api_post_mover(numero):
     body = get_body()
     novo_status = body.get("status", "")
@@ -796,6 +842,7 @@ def api_post_mover(numero):
 
 
 @app.route("/api/processos/<path:numero>/anexos", methods=["POST"])
+@requer_auth
 def api_post_salvar_anexo(numero):
     body = get_body()
     app_id = body.get("app_id", "")
@@ -836,6 +883,7 @@ def api_post_salvar_anexo(numero):
 
 
 @app.route("/api/anexos/<int:anexo_id>/deletar", methods=["POST"])
+@requer_auth
 def api_post_deletar_anexo(anexo_id):
     conn = conectar()
     row = conn.execute("SELECT caminho FROM anexos WHERE id=?", [anexo_id]).fetchone()
@@ -851,6 +899,7 @@ def api_post_deletar_anexo(anexo_id):
 
 
 @app.route("/api/admin/usuarios", methods=["POST"])
+@requer_auth
 def api_post_criar_usuario():
     body = get_body()
     login = body.get("login", "").strip()
@@ -876,6 +925,7 @@ def api_post_criar_usuario():
 
 
 @app.route("/api/admin/usuarios/<path:login_u>", methods=["POST"])
+@requer_auth
 def api_post_editar_usuario(login_u):
     body = get_body()
     acao = body.get("acao", "")
@@ -904,6 +954,7 @@ def api_post_editar_usuario(login_u):
 
 
 @app.route("/api/admin/reimportar", methods=["POST"])
+@requer_auth
 def api_post_reimportar():
     arq1 = os.path.join(DIR_BASE, "data.xlsx")
     arq2 = os.path.join(DIR_BASE, "data (7).xlsx")
