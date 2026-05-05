@@ -1,0 +1,352 @@
+"""
+importar_excel.py
+Importa e cruza os dois Excel para o banco SQLite.
+
+Uso:
+  python importar_excel.py data.xlsx                   (só contratos)
+  python importar_excel.py data.xlsx data__7_.xlsx     (cruza os dois)
+
+Requisitos: pip install openpyxl pandas
+"""
+
+import sys, sqlite3, warnings, io, csv
+import pandas as pd
+from datetime import datetime
+
+warnings.filterwarnings("ignore")
+DB_ARQUIVO = "banco_laudos.db"
+
+# ── Mapeamento de produtos ──
+# Arquivo 1 (data.xlsx) — campo ds_produto_contratado
+MAPA_PROD_ARQ1 = {
+    "CONSIGNADO REFINANCIAMENTO":            "Empréstimo Consignado",
+    "PREST CONSIGNADO":                      "Empréstimo Consignado",
+    "CARTAO CONSIGNADO":                     "Empréstimo Consignado",
+    "CARTAO INSS CONSIGNADO":                "Empréstimo Consignado",
+    "CP REFIN DOMICILIO MP":                 "Empréstimo Consignado",
+    "PORTABILIDADE CONSIGNADO":              "Empréstimo Consignado",
+    "CP REFIN DOMICILIO":                    "Empréstimo Consignado",
+    "CP CONSIGNADO COMPRA DE CARTEIRA":      "Empréstimo Consignado",
+    "CP RENOVADO MIGRACAO":                  "Empréstimo Consignado",
+    "CP CONSIGNADO INSS":                    "Empréstimo Consignado",
+    "CONSIGNADO NOVO MIGRAÇÃO":              "Empréstimo Consignado",
+    "CP REFIN MP":                           "Empréstimo Consignado",
+    "CP REFIN":                              "Empréstimo Consignado",
+    "CP REFIN DOMICILIO INAD":               "Empréstimo Consignado",
+    "CP REFIN DOMICILIO SAD AGIBANK":        "Empréstimo Consignado",
+    "CREDITO CONSIGNADO REFIN MP":           "Empréstimo Consignado",
+    "REFIN CONSIGNADO MIGRAÇÃO":             "Empréstimo Consignado",
+    "CRÉDITO CONSIGNADO NOVO AUMENTO MARGEM":"Empréstimo Consignado",
+    "REFINANCIAMENTO CONSIGNADO PUBLICO":    "Empréstimo Consignado",
+    "CP PORTABILIDADE NOVO":                 "Empréstimo Consignado",
+    "CP REFIN DOMICILIO AGIBANK MP":         "Empréstimo Consignado",
+    "CP CONSIGNADO EMPACOTADOR DE DÍVIDAS":  "Empréstimo Consignado",
+    "CP REFIN DOMICILIO AGIBANK":            "Empréstimo Consignado",
+    "CP REFIN CORRENTISTA MP":               "Empréstimo Consignado",
+    "CONSIGNADO PUBLICO":                    "Empréstimo Consignado",
+    "CP CONSIGNADO INSS NORMAL":             "Empréstimo Consignado",
+    "CP CONSIGNADO INSS RETENCAO":           "Empréstimo Consignado",
+    "PORTABILIDADE PUBLICO":                 "Empréstimo Consignado",
+    "CP REFIN RENOVAÇÃO":                    "Empréstimo Consignado",
+    "CP REFIN PORTABILIDADE":                "Empréstimo Consignado",
+    "CP REFIN CORRENTISTA":                  "Empréstimo Consignado",
+    "CP PORTABILIDADE HLP":                  "Empréstimo Consignado",
+    "CP PORTABILIDADE HCP":                  "Empréstimo Consignado",
+    "CP CONSIGNADO INSS  INTERMEDIARIA":     "Empréstimo Consignado",
+    "CP CONSIGNADO INSS FLEX III":           "Empréstimo Consignado",
+    "CARTAO CONSIGNADO PUBLICO":             "Empréstimo Consignado",
+    "REFIN CREDITO DO TRABALHADOR":          "Empréstimo Consignado",
+    "CREDITO DO TRABALHADOR":                "Empréstimo Consignado",
+    "CP REFIN PRÉ APROVADO MP":              "Empréstimo Consignado",
+    "CP REFIN DOMICILIO SAD AGIBANK MP":     "Empréstimo Consignado",
+    "CP 13 MIGRACAO":                        "Empréstimo Consignado",
+    "CRÉDITO PESSOAL RENOVADO":              "Crédito Pessoal",
+    "EMPRÉSTIMO PESSOAL":                    "Crédito Pessoal",
+    "CP DOMICILIO NOVO":                     "Crédito Pessoal",
+    "CP NOVO":                               "Crédito Pessoal",
+    "CP DOMICILIO HCP":                      "Crédito Pessoal",
+    "CP DOMICILIO MIGRACAO":                 "Crédito Pessoal",
+    "CP FÔLEGO EXTRA":                       "Crédito Pessoal",
+    "CP DOMICILIO HLP":                      "Crédito Pessoal",
+    "CP AGI13 HCP":                          "Crédito Pessoal",
+    "CP DOMICILIO SAD AGIBANK NOVO":         "Crédito Pessoal",
+    "CP AGI13 NOVO":                         "Crédito Pessoal",
+    "CP DOMICILIO LCP":                      "Crédito Pessoal",
+    "CP NOVO HCP":                           "Crédito Pessoal",
+    "CP NOVO LCP":                           "Crédito Pessoal",
+    "CP DOMICILIO AGIBANK NOVO":             "Crédito Pessoal",
+    "CP NOVO HLP":                           "Crédito Pessoal",
+    "CP AGI13 HLP":                          "Crédito Pessoal",
+    "CREDITO PESSOAL CORRENTISTA":           "Crédito Pessoal",
+    "CP CORRENTISTA NOVO":                   "Crédito Pessoal",
+    "CP DOMICILIO AGIBANK HCP":              "Crédito Pessoal",
+    "CP DOMICILIO AGIBANK LCP":              "Crédito Pessoal",
+    "CP DOMICILIO AGIBANK HLP":              "Crédito Pessoal",
+    "CP NOVO ESPECIAL MP CFI":               "Crédito Pessoal",
+    "CP NOVO ESPECIAL HCP":                  "Crédito Pessoal",
+    "CREDITO PESSOAL RENOVADO CORRENTISTA":  "Crédito Pessoal",
+    "CP DEBITO EXTERNO RENOVADO MIGRACAO":   "Crédito Pessoal",
+    "CP AGI13 PARCELA 2 AUTOMATICO":         "Crédito Pessoal",
+    "CP AGI13 DOMICILIO AGIBANK NOVO":       "Crédito Pessoal",
+    "CP ANTECIPACAO 13":                     "Crédito Pessoal",
+    "ANTECIPACAO DO SAQUE ANIVERSARIO FGTS": "Crédito Pessoal",
+    "RENEGOCIAÇÃO DE DÍVIDAS":               "Crédito Pessoal",
+    "RENEG MIGRACAO":                        "Crédito Pessoal",
+    "CP DOMICILIO SAD AGIBANK HCP":          "Crédito Pessoal",
+    "CP DOMICILIO SAD AGIBANK LCP":          "Crédito Pessoal",
+    "CP DOMICILIO SAD AGIBANK HLP":          "Crédito Pessoal",
+    "CP AGI13 DOMICILIO SAD AGIBANK NOVO":   "Crédito Pessoal",
+    "CP AGI13 DOMICILIO SAD AGIBANK HCP":    "Crédito Pessoal",
+    "CP AGI13 DOMICILIO SAD AGIBANK PARCELA 2": "Crédito Pessoal",
+    "CP AGI13 DOMICÍLIO HCP":               "Crédito Pessoal",
+    "CP AGI13 DOMICILIO PARCELA 2":          "Crédito Pessoal",
+    "CP AGI13 DOMICÍLIO NOVO":              "Crédito Pessoal",
+    "CP AGI13 DOMICÍLIO HLP":              "Crédito Pessoal",
+    "CARTÃO DBC":                            "Cartão",
+    "CADASTRO_OPTANTE_DEBITO":               "Cartão",
+}
+
+# Arquivo 2 (data__7_.xlsx) — col L — produto DIRETO, sem mapeamento adicional
+# O produto já vem no formato do sistema.
+MAPA_PROD_ARQ2 = {
+    "Empréstimo Consignado":  "Empréstimo Consignado",
+    "Cartão Consignado":      "Empréstimo Consignado",  # consignado
+    "Crédito Consignado Público": "Empréstimo Consignado",
+    "Crédito do Trabalhador": "Empréstimo Consignado",
+    "Crédito Pessoal":        "Crédito Pessoal",
+    "Conta Corrente":         "Crédito Pessoal",
+    "Seguro":                 "Crédito Pessoal",
+    "Consórcio":              "Crédito Pessoal",
+    "Cartão Benefício":       "Cartão",
+    "Cartão de Crédito DBC":  "Cartão",
+    "A classificar":          "",
+    "Não cliente":            "",
+}
+
+
+def is_vazio(v):
+    return str(v).strip() in ("", "nan", "None", "NaN", "NaT", "nat")
+
+
+def agora():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def mapear_arq1(v):
+    if is_vazio(str(v)): return ""
+    return MAPA_PROD_ARQ1.get(str(v).strip(), str(v).strip())
+
+
+def mapear_arq2(v):
+    if is_vazio(str(v)): return ""
+    return MAPA_PROD_ARQ2.get(str(v).strip(), str(v).strip())
+
+
+def formatar_data(val):
+    if is_vazio(str(val)): return ""
+    try:
+        ts = pd.to_datetime(val, dayfirst=True, errors="coerce")
+        if pd.isna(ts): return str(val).strip()
+        return ts.strftime("%d/%m/%Y")
+    except Exception:
+        return str(val).strip()
+
+
+def ler_arq2_csv(caminho):
+    """
+    Lê data__7_.xlsx convertendo para CSV interno.
+    Retorna DataFrame COM a coluna Data Entrada convertida para ordenação.
+    """
+    print(f"  Lendo {caminho} (convertendo para CSV)...")
+    import openpyxl
+    wb = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
+    ws = wb.active
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    header_row = None
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        vals = [str(v) if v is not None else "" for v in row]
+        if header_row is None and "Processo" in vals:
+            header_row = i
+        writer.writerow(vals)
+    wb.close()
+    buf.seek(0)
+    df = pd.read_csv(buf, header=header_row if header_row else 0, low_memory=False)
+    print(f"  Lido: {len(df)} linhas | colunas: {list(df.columns[:6])}")
+    return df
+
+
+def preparar_arq2(df2):
+    """
+    Para cada número de processo retorna:
+      - autor        (col B)
+      - cpf          (col AI — CPF do Adverso)
+      - produto      (col L — mais recente)
+      - causa_raiz   (col M — mais recente)
+      - data_entrada (col A — mais recente como string dd/mm/yyyy)
+      - demais campos da linha mais recente
+    Regra: se há múltiplas linhas para o mesmo processo, usa a de maior data de entrada.
+    """
+    df2 = df2.copy()
+    df2["Processo"] = df2["Processo"].astype(str).str.strip()
+    df2 = df2[~df2["Processo"].apply(is_vazio)]
+
+    # Converter Data Entrada para ordenação
+    df2["_dt_ord"] = pd.to_datetime(df2["Data Entrada"], errors="coerce", dayfirst=True)
+
+    # Para cada processo, pegar a linha com maior _dt_ord
+    df2 = df2.sort_values("_dt_ord", ascending=False)
+    df2_recente = df2.drop_duplicates(subset="Processo", keep="first")
+    df2_idx = df2_recente.set_index("Processo")
+
+    print(f"  Processos únicos no arq2: {len(df2_idx)}")
+    return df2_idx
+
+
+def g2val(g2, col):
+    try:
+        v = g2[col] if col in g2.index else ""
+        return "" if is_vazio(str(v)) else str(v).strip()
+    except Exception:
+        return ""
+
+
+def importar(caminho1, caminho2=None):
+    print(f"\n  Lendo arquivo 1: {caminho1}")
+    df1 = pd.read_excel(caminho1)
+    for col in [c for c in df1.columns if c not in ["Dt Inclusão", "dt_contrato"]]:
+        df1[col] = df1[col].astype(str).str.strip()
+    df1 = df1[~df1["Processo"].apply(is_vazio)].copy()
+    print(f"  Arquivo 1: {len(df1)} linhas | {df1['Processo'].nunique()} processos únicos")
+
+    df2_idx = None
+    if caminho2:
+        df2_raw = ler_arq2_csv(caminho2)
+        df2_idx  = preparar_arq2(df2_raw)
+        proc1    = set(df1["Processo"].unique())
+        cob      = len(proc1 & set(df2_idx.index))
+        print(f"  Cruzamento: {cob}/{len(proc1)} processos ({cob/len(proc1)*100:.0f}%)")
+
+    conn = sqlite3.connect(DB_ARQUIVO)
+    conn.row_factory = sqlite3.Row
+    grupos = df1.groupby("Processo")
+    inseridos = atualizados = ignorados = 0
+
+    for proc_num, grupo in grupos:
+        # Contratos válidos do arquivo 1
+        ct_val = grupo[
+            grupo["ds_observacoes"].apply(lambda x: not is_vazio(str(x))) &
+            (grupo["Valido"].astype(str).str.strip() == "S")
+        ]
+        tem_ct = len(ct_val) > 0
+        status = "sem_contrato" if not tem_ct else "em_andamento"
+
+        pasta  = next((r for r in grupo["Pasta"]        if not is_vazio(str(r))), "")
+        escrit = next((r for r in grupo["nm_escritorio"] if not is_vazio(str(r))), "")
+        cpf    = next((r for r in grupo["nr_cpf_cnpj"]  if not is_vazio(str(r))), "")
+        dt_inc = formatar_data(next((r for r in grupo["Dt Inclusão"] if not is_vazio(str(r))), ""))
+
+        # Campos do arquivo 2 (prioridade sobre arquivo 1)
+        autor = causa_raiz = advogado = motivo = comarca = estado = ""
+        fase = natureza = adv_agressor = filial = produto_arq2 = ""
+
+        if df2_idx is not None and proc_num in df2_idx.index:
+            g2 = df2_idx.loc[proc_num]
+            escrit       = g2val(g2, "Escritorio")         or escrit
+            cpf          = g2val(g2, "CPF do Adverso")     or cpf    # col AI
+            autor        = g2val(g2, "Autor")                         # col B
+            causa_raiz   = g2val(g2, "Causa Raiz")                    # col M (mais recente)
+            produto_arq2 = mapear_arq2(g2val(g2, "Produto"))          # col L
+            dt_entrada   = formatar_data(g2val(g2, "Data Entrada"))    # col A
+            if dt_entrada:
+                dt_inc = dt_entrada   # substitui data de inclusão do arq1 pela col A do arq2
+            advogado     = g2val(g2, "Advogado do Autor")
+            motivo       = g2val(g2, "Motivo do Ajuizamento")
+            comarca      = g2val(g2, "Comarca")
+            estado       = g2val(g2, "Estado")
+            fase         = g2val(g2, "Fase")
+            natureza     = g2val(g2, "Natureza")
+            filial       = g2val(g2, "Filial")
+            fl_adv       = g2val(g2, "Soma de fl_adv_agressor")
+            adv_agressor = "Sim" if fl_adv == "1" else ("Não" if fl_adv == "0" else "")
+
+        # Contratos
+        contratos = []
+        for _, row in ct_val.iterrows():
+            nr  = str(row["ds_observacoes"]).strip() if not is_vazio(str(row["ds_observacoes"])) else str(row["nr_contrato"]).strip()
+            raw = str(row["ds_produto_contratado"]).strip() if not is_vazio(str(row["ds_produto_contratado"])) else ""
+            contratos.append({
+                "nr_contrato": nr,
+                "ds_produto":  mapear_arq1(raw) or produto_arq2,
+                "dt_contrato": formatar_data(row["dt_contrato"]),
+                "vl_contrato": str(row["vl_contrato"]).strip() if not is_vazio(str(row["vl_contrato"])) else "",
+            })
+
+        # Produto principal: prioridade col L do arq2, fallback contrato
+        produto_principal = produto_arq2 or (contratos[0]["ds_produto"] if contratos else "")
+
+        existente = conn.execute("SELECT id, status, resumo_causa, produto, autor, causa_raiz, adv_agressor FROM processos WHERE processo=?", [proc_num]).fetchone()
+
+        if existente:
+            if existente["status"] in ("aguardando", "concluido"):
+                ignorados += 1
+                continue
+            # Preserva campos do laudo já editados pelo analista.
+            # Só sobrescreve campos de conteúdo (produto, autor, causa_raiz, adv_agressor)
+            # se ainda não foram preenchidos no banco.
+            analista_editou = not is_vazio(str(existente["resumo_causa"] or ""))
+            prod_final      = existente["produto"]    if (analista_editou and not is_vazio(str(existente["produto"] or "")))    else produto_principal
+            autor_final     = existente["autor"]      if (analista_editou and not is_vazio(str(existente["autor"] or "")))      else autor
+            cr_final        = existente["causa_raiz"] if (analista_editou and not is_vazio(str(existente["causa_raiz"] or ""))) else causa_raiz
+            adv_final       = existente["adv_agressor"] if (analista_editou and not is_vazio(str(existente["adv_agressor"] or ""))) else adv_agressor
+            conn.execute(
+                """UPDATE processos
+                   SET pasta=?,nr_cpf_cnpj=?,nm_escritorio=?,dt_inclusao=?,status=?,
+                       produto=?,autor=?,causa_raiz=?,advogado=?,motivo_ajuizamento=?,
+                       comarca=?,estado=?,fase=?,natureza=?,adv_agressor=?,filial=?,
+                       dt_atualizacao=?
+                   WHERE id=?""",
+                [pasta,cpf,escrit,dt_inc,status,prod_final,autor_final,cr_final,
+                 advogado,motivo,comarca,estado,fase,natureza,adv_final,filial,
+                 agora(),existente["id"]]
+            )
+            proc_id = existente["id"]
+            conn.execute("DELETE FROM contratos WHERE processo_id=?", [proc_id])
+            atualizados += 1
+        else:
+            cur = conn.execute(
+                """INSERT INTO processos
+                   (processo,pasta,nr_cpf_cnpj,nm_escritorio,dt_inclusao,status,
+                    produto,autor,causa_raiz,advogado,motivo_ajuizamento,
+                    comarca,estado,fase,natureza,adv_agressor,filial,dt_atualizacao)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [proc_num,pasta,cpf,escrit,dt_inc,status,produto_principal,
+                 autor,causa_raiz,advogado,motivo,comarca,estado,fase,natureza,
+                 adv_agressor,filial,agora()]
+            )
+            proc_id = cur.lastrowid
+            inseridos += 1
+
+        for ct in contratos:
+            conn.execute(
+                "INSERT INTO contratos (processo_id,nr_contrato,ds_produto,dt_contrato,vl_contrato) VALUES (?,?,?,?,?)",
+                [proc_id,ct["nr_contrato"],ct["ds_produto"],ct["dt_contrato"],ct["vl_contrato"]]
+            )
+
+    conn.commit()
+    conn.close()
+
+    print(f"\n  Importacao concluida:")
+    print(f"    Inseridos:   {inseridos}")
+    print(f"    Atualizados: {atualizados}")
+    print(f"    Ignorados:   {ignorados}")
+    print(f"\n  Inicie o sistema com: python servidor.py\n")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Uso: python importar_excel.py data.xlsx [data__7_.xlsx]")
+        sys.exit(1)
+    from servidor import criar_tabelas
+    criar_tabelas()
+    importar(sys.argv[1], sys.argv[2] if len(sys.argv) >= 3 else None)

@@ -1,0 +1,634 @@
+"""
+gerar_laudo_pdf.py
+Gera o laudo sistêmico em PDF com o estilo exato do modelo Agibank.
+
+Paleta extraída do LAUDO_MODELO_EMPRESTIMO_CONSIGNADO.docx:
+  - Fonte principal: Calibri (fallback Helvetica no PDF)
+  - Título principal: #00B0F0 (azul vibrante), 16pt, negrito
+  - Bordas de tabela: #005172 (azul petróleo)
+  - Cabeçalho de coluna: #D9D9D9 (cinza claro), texto #2F5496 (azul médio)
+  - Texto normal: preto, 11pt
+  - Logo Agi: imagem PNG no cabeçalho de cada página
+  - Rodapé: "Este documento foi classificado como: Público."
+  - Divisores de seção: linha #005172
+
+Uso: python3 gerar_laudo_pdf.py dados.json saida.pdf
+"""
+
+import sys, json, io, os
+from datetime import datetime
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY, TA_RIGHT
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle, Paragraph,
+    Spacer, HRFlowable, KeepTogether, Image
+)
+
+# ── Paleta exata do modelo Agi ──
+C_AZUL_BORDA  = colors.HexColor("#005172")   # bordas de todas as tabelas
+C_AZUL_TITULO = colors.HexColor("#00B0F0")   # título principal
+C_AZUL_LABEL  = colors.HexColor("#2F5496")   # texto dos cabeçalhos de coluna
+C_CINZA_HDR   = colors.HexColor("#D9D9D9")   # fundo dos cabeçalhos
+C_PRETO       = colors.black                  # texto normal
+C_CINZA_TXT   = colors.HexColor("#595959")   # texto secundário
+C_BRANCO      = colors.white
+C_VERDE_SIM   = colors.HexColor("#1A7A5E")
+C_VERDE_FND   = colors.HexColor("#E8F5F0")
+C_VERM        = colors.HexColor("#C0392B")
+C_VERM_FND    = colors.HexColor("#FEF2F2")
+
+# ── Dimensões (A4 com margens do modelo: 1134 DXA ≈ 2cm) ──
+MG_L  = 20 * mm
+MG_R  = 20 * mm
+MG_T  = 30 * mm   # logo Agi (≈21mm) + margem (9mm)
+MG_B  = 18 * mm
+W     = A4[0] - MG_L - MG_R  # largura útil ≈ 170mm
+C1    = 58 * mm               # coluna rótulo
+C2    = W - C1                # coluna valor
+
+# Caminho da logo (na mesma pasta do script)
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_agibank.png")
+
+# ── Estilos ──
+ST_TITULO = ParagraphStyle("titulo",
+    fontName="Helvetica-Bold", fontSize=14,
+    textColor=C_AZUL_TITULO,
+    alignment=TA_CENTER,
+    spaceAfter=8, spaceBefore=4)
+
+ST_SECAO = ParagraphStyle("secao",
+    fontName="Helvetica-Bold", fontSize=10,
+    textColor=C_PRETO,
+    spaceAfter=3, spaceBefore=8)
+
+ST_CORPO = ParagraphStyle("corpo",
+    fontName="Helvetica", fontSize=9.5,
+    textColor=C_PRETO, leading=14,
+    spaceAfter=4, alignment=TA_JUSTIFY)
+
+ST_ITALICO = ParagraphStyle("italico",
+    fontName="Helvetica-Oblique", fontSize=8.5,
+    textColor=C_CINZA_TXT, leading=12,
+    spaceAfter=4)
+
+ST_CEL = ParagraphStyle("cel",
+    fontName="Helvetica", fontSize=9,
+    textColor=C_PRETO, leading=12)
+
+ST_CEL_BOLD = ParagraphStyle("cel_bold",
+    fontName="Helvetica-Bold", fontSize=9,
+    textColor=C_AZUL_LABEL, leading=12)
+
+ST_CEL_CTR = ParagraphStyle("cel_ctr",
+    fontName="Helvetica", fontSize=9,
+    textColor=C_PRETO, leading=12,
+    alignment=TA_CENTER)
+
+ST_SIM = ParagraphStyle("sim",
+    fontName="Helvetica-Bold", fontSize=9,
+    textColor=C_VERDE_SIM, alignment=TA_CENTER)
+
+ST_NAO = ParagraphStyle("nao",
+    fontName="Helvetica-Bold", fontSize=9,
+    textColor=C_VERM, alignment=TA_CENTER)
+
+ST_RES_BOX = ParagraphStyle("res_box",
+    fontName="Helvetica-Bold", fontSize=9,
+    textColor=C_AZUL_BORDA, alignment=TA_CENTER, leading=13)
+
+ST_RODAPE = ParagraphStyle("rodape",
+    fontName="Helvetica", fontSize=8,
+    textColor=C_PRETO, alignment=TA_LEFT)
+
+ST_PARECER = ParagraphStyle("parecer",
+    fontName="Helvetica", fontSize=9.5,
+    textColor=C_PRETO, leading=14,
+    spaceAfter=5, alignment=TA_JUSTIFY)
+
+
+# ── Helpers ──
+def bdr(cor=C_AZUL_BORDA, sz=0.5):
+    return {"style": "GRID", "color": cor, "thickness": sz}
+
+def tbl_style(rows_data, extras=None):
+    cmds = [
+        ("FONTNAME",      (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 9),
+        ("GRID",          (0, 0), (-1, -1), 0.5, C_AZUL_BORDA),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    if extras:
+        cmds.extend(extras)
+    return TableStyle(cmds)
+
+def divisor():
+    return HRFlowable(width="100%", thickness=1,
+                      color=C_AZUL_BORDA, spaceAfter=5, spaceBefore=5)
+
+def sp(h=3):
+    return Spacer(1, h * mm)
+
+def p(txt, st=ST_CORPO):
+    return Paragraph(str(txt) if txt else "", st)
+
+
+# ── Tabela identificação (estilo modelo Agi: 2 colunas, cabeçalho cinza) ──
+def tbl_identificacao(D):
+    def val(key, fallback=""):
+        return str(D.get(key) or D.get(fallback) or "")
+
+    def hdr(txt):
+        """Linha de cabeçalho de seção interna — colspan 2, fundo escuro, texto branco."""
+        return [p(txt, ParagraphStyle("h", fontName="Helvetica-Bold",
+                  fontSize=9, textColor=C_BRANCO, leading=12)), ""]
+
+    def row(lbl, valor):
+        return [p(lbl, ST_CEL_BOLD), p(valor, ST_CEL)]
+
+    linhas = [
+        hdr("DADOS DA AÇÃO JUDICIAL"),
+        row("Nº Processo Judicial",  val("processo")),
+        row("Data de Distribuição",  val("data_dist", "dt_inclusao")),
+        row("Autor(a)",              val("autor", "nome_cliente")),
+        row("CPF",                   val("cpf", "nr_cpf_cnpj")),
+        row("Endereço",              val("endereco")),
+        hdr("CLASSIFICAÇÃO DO PROCESSO"),
+        row("Produto Principal",     val("produto")),
+        row("Causa Raiz",            val("causa_raiz")),
+    ]
+
+    n = len(linhas)
+    extras = [
+        # Linhas de cabeçalho interno: fundo azul escuro, texto branco, colspan
+        ("SPAN",       (0, 0),  (-1, 0)),
+        ("BACKGROUND", (0, 0),  (-1, 0),  C_AZUL_BORDA),
+        ("SPAN",       (0, 6),  (-1, 6)),
+        ("BACKGROUND", (0, 6),  (-1, 6),  C_AZUL_BORDA),
+        # Rótulos cinza
+        ("BACKGROUND", (0, 1),  (0, 5),   C_CINZA_HDR),
+        ("BACKGROUND", (0, 7),  (0, -1),  C_CINZA_HDR),
+        ("TEXTCOLOR",  (0, 1),  (0, -1),  C_AZUL_LABEL),
+        # Valores brancos
+        ("BACKGROUND", (1, 1),  (1, -1),  C_BRANCO),
+        ("ROWBACKGROUNDS", (1, 1), (1, 5),  [C_BRANCO, colors.HexColor("#F7F9FA")]),
+        ("ROWBACKGROUNDS", (1, 7), (1, -1), [C_BRANCO, colors.HexColor("#F7F9FA")]),
+    ]
+    style = tbl_style(linhas, extras)
+    return Table(linhas, colWidths=[C1, C2], style=style, hAlign="LEFT")
+
+
+# ── Tabela checklist (estilo modelo Agi) ──
+def tbl_checklist(D):
+    produto = str(D.get("produto","")).upper()
+    is_cartao     = "CARTAO" in produto or "CARTÃO" in produto
+    is_emprestimo = not is_cartao  # Empréstimo Consignado e Crédito Pessoal
+
+    # Todas as perguntas com flag de produto (None = todos)
+    todas_perguntas = [
+        ("ck_bo",               "O Autor apresenta Boletim de Ocorrência? Confrontar a narrativa do BO com a Inicial.", None),
+        ("ck_analfabeto",       "Autor traz evidências de que é analfabeto/interditado/doença grave?", None),
+        ("ck_terceiros",        "O valor liberado na conta do cliente foi transferido para terceiros em data próxima ao recebimento?", None),
+        ("ck_primeira_tx",      "Foi a primeira transação do cliente? Ou possuía outros contratos e transações com o Agibank?", None),
+        ("ck_biometria_leg",    "A biometria facial está legível?", None),
+        ("ck_biometria_ok",     "A biometria confere com os documentos da inicial?", None),
+        ("ck_docs_ok",          "Os documentos da inicial conferem com os docs. no banco de dados do Agibank (RG, CPF, telefone, endereço)?", None),
+        ("ck_conta_agi",        "O cliente possui conta no Agibank?", None),
+        ("ck_compras",          "O valor do contrato liberado foi usado pelo cliente em compras?", "emprestimo"),
+        ("ck_compras_anormais", "Avaliando o extrato, as compras fogem da normalidade das compras anteriores do cliente?", "emprestimo"),
+        ("ck_ted",              "TED da liberação do valor", None),
+        ("ck_saque_cartao",     "Houve apenas saque no cartão?", "cartao"),
+        ("ck_uso_cartao",       "Houve compra ou uso do cartão consignado?", "cartao"),
+        ("ck_pagamento_fatura", "Houve pagamento integral de faturas ou apenas o mínimo?", "cartao"),
+        ("ck_valor_conta",      "Valor do empréstimo recebido na conta Agibank?", None),
+        ("ck_spc",              "Alegada irregularidade na inscrição ao SPC?", None),
+        ("ck_procuracao",       "A procuração do autor está atualizada?", None),
+        ("ck_comprov_end",      "Comprovante de endereço está atualizado?", None),
+        ("ck_outras_acoes",     "Cliente possui outras ações contra o Agibank?", None),
+        ("ck_passagens",        "Há passagens prévias pelos canais?", None),
+    ]
+    perguntas = [
+        (campo, texto)
+        for campo, texto, flag in todas_perguntas
+        if flag is None
+        or (flag == "cartao"     and is_cartao)
+        or (flag == "emprestimo" and is_emprestimo)
+    ]
+
+    linhas = [[
+        p("ITEM DE VERIFICAÇÃO", ParagraphStyle("h", fontName="Helvetica-Bold",
+          fontSize=9, textColor=C_BRANCO, leading=12)),
+        p("RESULTADO", ParagraphStyle("h", fontName="Helvetica-Bold",
+          fontSize=9, textColor=C_BRANCO, leading=12, alignment=TA_CENTER)),
+    ]]
+    for campo, texto in perguntas:
+        resp = str(D.get(campo) or "")
+        st_resp = ST_SIM if resp in ("Sim","sim") else ST_NAO if resp in ("Não","Nao","nao") else ST_CEL_CTR
+        linhas.append([p(texto, ST_CEL), p(resp or "—", st_resp)])
+
+    # Extras: validações
+    validacoes = [
+        ("ck_valor_conta",    "Valor do empréstimo recebido na conta Agibank?"),
+        ("ck_spc",            "Alegada irregularidade na inscrição ao SPC?"),
+        ("ck_procuracao",     "A procuração do autor está atualizada?"),
+        ("ck_comprov_end",    "Comprovante de endereço está atualizado?"),
+        ("ck_outras_acoes",   "Cliente possui outras ações contra o Agibank?"),
+        ("ck_passagens",      "Há passagens prévias pelos canais?"),
+    ]
+
+    n = len(linhas)
+    extras = [
+        ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#005172")),
+        ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("TEXTCOLOR",   (0, 0), (-1, 0), C_BRANCO),
+        ("ALIGN",       (1, 0), (1,  0), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_BRANCO, colors.HexColor("#F7F9FA")]),
+    ]
+    # Colorir respostas Sim/Não
+    for i, (campo, _) in enumerate(perguntas, 1):
+        resp = str(D.get(campo) or "")
+        if resp in ("Sim","sim"):
+            extras.append(("BACKGROUND", (1, i), (1, i), C_VERDE_FND))
+        elif resp in ("Não","Nao","nao"):
+            extras.append(("BACKGROUND", (1, i), (1, i), C_VERM_FND))
+
+    style = tbl_style(linhas, extras)
+    return Table(linhas, colWidths=[W - 25*mm, 25*mm], style=style, hAlign="LEFT")
+
+
+# ── Tabela sistemas ──
+def tbl_sistemas(D):
+    sis_lista = [
+        ("AppSmith",         D.get("appsmith_qtd","0"),   "anexos"),
+        ("Conductor",        D.get("conductor_qtd","0"),  "registros"),
+        ("Fraud Prevention", D.get("fraud_qtd","0"),      "registros"),
+        ("GED",              D.get("ged_qtd","0"),        "documentos"),
+        ("Matera",           D.get("matera_qtd","0"),     "registros"),
+        ("Recupera",         D.get("recupera_qtd","0"),   "registros"),
+        ("Salesforce",       D.get("salesforce_qtd","0"), "registros"),
+        ("Único Biometria",  D.get("biometria_qtd","0"),  "registros"),
+    ]
+
+    linhas = [[p("Sistema", ST_CEL_BOLD), p("Registros Encontrados", ST_CEL_BOLD)]]
+    for nome, qtd, unid in sis_lista:
+        val = "Não consultado" if not qtd or qtd == "0" else f"{qtd} {unid}"
+        linhas.append([p(nome, ST_CEL), p(val, ST_CEL_CTR)])
+
+    style = tbl_style(linhas, [
+        ("BACKGROUND",     (0, 0), (-1, 0), colors.HexColor("#005172")),
+        ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), C_BRANCO),
+        ("ALIGN",          (1, 1), (1, -1), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [C_BRANCO, colors.HexColor("#F7F9FA")]),
+    ])
+    return Table(linhas, colWidths=[W/2, W/2], style=style, hAlign="LEFT")
+
+
+# ── Tabela resultado final ──
+def tbl_resultado(D):
+    fav       = str(D.get("subsidios_fav","")) == "Sim"
+    cor_borda = C_AZUL_BORDA
+    cor_fundo = C_VERDE_FND if fav else C_VERM_FND
+
+    res_txt = (f"Subsídios: {D.get('subsidios_fav','')}   |   "
+               f"Estratégia: {D.get('estrategia','')}   |   "
+               f"Resultado: {D.get('resultado_tipo','')}")
+
+    linhas = [
+        [p(res_txt, ST_RES_BOX)],
+        [p("Subsídios Favoráveis", ST_CEL_BOLD), p(str(D.get("subsidios_fav","")), ST_CEL)],
+        [p("Estratégia",           ST_CEL_BOLD), p(str(D.get("estrategia","")),    ST_CEL)],
+        [p("Resultado",            ST_CEL_BOLD), p(str(D.get("resultado_tipo","")),ST_CEL)],
+
+    ]
+
+    style = tbl_style(linhas, [
+        ("SPAN",         (0, 0), (-1, 0)),
+        ("BACKGROUND",   (0, 0), (-1, 0), cor_fundo),
+        ("BOX",          (0, 0), (-1, 0), 1.5, cor_borda),
+        ("TOPPADDING",   (0, 0), (-1, 0), 10),
+        ("BOTTOMPADDING",(0, 0), (-1, 0), 10),
+        ("BACKGROUND",   (0, 1), (0, -1), colors.HexColor("#F7F9FA")),
+        ("FONTNAME",     (0, 1), (0, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR",    (0, 1), (0, -1), C_AZUL_LABEL),
+    ])
+    return Table(linhas, colWidths=[C1, C2], style=style, hAlign="LEFT")
+
+
+# ── Parecer padronizado ──
+def gerar_parecer(D):
+    paras = []
+    prod = str(D.get("produto",""))
+    prod_txt = ("empréstimo consignado" if "CONSIGNADO" in prod.upper() else
+                "cartão consignado"     if "CARTAO"     in prod.upper() else
+                "crédito pessoal")
+    fav = str(D.get("subsidios_fav","")) == "Sim"
+
+    paras.append(p(
+        f"Com base na análise dos subsídios levantados junto aos sistemas internos do Agibank, "
+        f"referente ao {prod_txt} vinculado ao presente processo, os elementos apurados são "
+        f"<b>{'FAVORÁVEIS' if fav else 'DESFAVORÁVEIS'}</b> ao Agibank.",
+        ST_PARECER
+    ))
+
+    ev_fav, ev_desf = [], []
+    if D.get("ck_biometria_ok")  in ("Sim","sim"): ev_fav.append("biometria facial conferida com os documentos da inicial")
+    if D.get("ck_docs_ok")       in ("Sim","sim"): ev_fav.append("documentos do autor (RG, CPF e endereço) compatíveis com o cadastro do Agibank")
+    if D.get("ck_conta_agi")     in ("Sim","sim"): ev_fav.append("cliente com conta ativa no Agibank, evidenciando relacionamento bancário preexistente")
+    if D.get("ck_primeira_tx")   in ("Não","Nao"): ev_fav.append("histórico de transações anteriores com a instituição")
+    if D.get("ck_terceiros")     in ("Não","Nao"): ev_fav.append("valor creditado sem transferência imediata para terceiros")
+    if D.get("ck_analfabeto")    in ("Não","Nao"): ev_fav.append("ausência de indícios de analfabetismo, interdição ou doença grave")
+    if D.get("ck_bo")            in ("Sim","sim"): ev_desf.append("Boletim de Ocorrência apresentado pelo autor")
+    if D.get("ck_analfabeto")    in ("Sim","sim"): ev_desf.append("indícios de analfabetismo, interdição ou doença grave")
+    if D.get("ck_terceiros")     in ("Sim","sim"): ev_desf.append("valor transferido para terceiros em data próxima ao recebimento")
+    if D.get("ck_biometria_leg") in ("Não","Nao"): ev_desf.append("biometria facial ilegível no momento da contratação")
+    if D.get("ck_biometria_ok")  in ("Não","Nao"): ev_desf.append("biometria não confere com os documentos da inicial")
+    if D.get("ck_docs_ok")       in ("Não","Nao"): ev_desf.append("divergências entre documentos da inicial e cadastro do Agibank")
+
+    if ev_fav:
+        paras.append(p("Os seguintes elementos corroboram a regularidade da contratação: " + "; ".join(ev_fav) + ".", ST_PARECER))
+    if ev_desf:
+        paras.append(p("Os seguintes elementos apresentam ressalvas: " + "; ".join(ev_desf) + ".", ST_PARECER))
+
+    sis = []
+    for campo, nome, unid in [
+        ("appsmith_qtd","AppSmith","anexos"), ("conductor_qtd","Conductor","registros"),
+        ("ged_qtd","GED","documentos"),       ("salesforce_qtd","Salesforce","registros"),
+        ("biometria_qtd","Único Biometria","registros"), ("fraud_qtd","Fraud Prevention","registros"),
+        ("matera_qtd","Matera","registros"),  ("recupera_qtd","Recupera","registros"),
+    ]:
+        v = str(D.get(campo,"0"))
+        if v and v != "0":
+            sis.append(f"{nome} ({v} {unid})")
+    if sis:
+        paras.append(p("Sistemas consultados: " + ", ".join(sis) + ".", ST_PARECER))
+
+    est = str(D.get("estrategia",""))
+    if est == "DEFESA":
+        rec = ("Diante do exposto, recomenda-se a estratégia de <b>DEFESA</b>, tendo em vista que os "
+               "subsídios apurados indicam a regularidade da operação e a ausência de irregularidades "
+               "que justifiquem o acolhimento do pedido autoral.")
+    elif est:
+        rec = ("Diante do exposto, recomenda-se a estratégia de <b>ACORDO</b>, uma vez que os subsídios "
+               "apurados não são suficientes para embasar uma defesa consistente, sendo mais adequada "
+               "a busca por composição amigável.")
+    else:
+        rec = ""
+    if rec:
+        paras.append(p(rec, ST_PARECER))
+
+    return paras
+
+
+# ── Cabeçalho e rodapé ──
+def on_page(canvas, doc, D, logo_img):
+    canvas.saveState()
+
+    # ── Logo Agi no topo (largura total da página) ──
+    if logo_img:
+        logo_w = A4[0]
+        logo_h = logo_w / (2481 / 250)
+        try:
+            from reportlab.lib.utils import ImageReader
+            from PIL import Image as _PILLogo
+            import io as _ioLogo
+            pil_logo = _PILLogo.open(logo_img)
+            if pil_logo.mode == "RGBA":
+                fundo_logo = _PILLogo.new("RGB", pil_logo.size, (255,255,255))
+                fundo_logo.paste(pil_logo, mask=pil_logo.split()[3])
+                pil_logo = fundo_logo
+            buf_logo = _ioLogo.BytesIO()
+            pil_logo.save(buf_logo, format="JPEG", quality=95)
+            buf_logo.seek(0)
+            canvas.drawImage(ImageReader(buf_logo), 0, A4[1] - logo_h,
+                             width=logo_w, height=logo_h)
+        except Exception:
+            # Fallback: desenhar tarja azul simples
+            canvas.setFillColor(colors.HexColor("#0090D4"))
+            canvas.rect(0, A4[1] - logo_h, A4[0], logo_h, fill=1, stroke=0)
+        header_bottom = A4[1] - logo_h
+    else:
+        header_bottom = A4[1] - 14 * mm
+
+    # ── Texto sobreposto na área branca da logo ──
+    # Logo: 60pt total, parte azul ~40pt, área branca ~20pt
+    # Área branca começa em: A4[1] - logo_h + 0 até A4[1] - logo_h + 20pt
+    if logo_img:
+        area_branca_y = A4[1] - logo_h  # base da área branca (= base da logo)
+        texto_y_cima  = area_branca_y + 13  # linha superior do texto na área branca
+        texto_y_baixo = area_branca_y + 4   # linha inferior
+
+        # Centro da área branca tem "agi" à esquerda e pontos à direita
+        # Colocar texto no centro-esquerda (após o "agi") e centro-direita (antes dos pontos)
+        centro_x = MG_L + 22 * mm  # após o "agi"
+
+        canvas.setFillColor(colors.HexColor("#005172"))
+        canvas.setFont("Helvetica-Bold", 9)
+        canvas.drawString(centro_x, texto_y_cima, "PARECER SUBSÍDIOS – CONTENCIOSO")
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#595959"))
+        canvas.drawString(centro_x, texto_y_baixo, "Análise Pericial")
+
+        canvas.setFont("Helvetica-Bold", 7.5)
+        canvas.setFillColor(colors.HexColor("#0090D4"))
+        canvas.drawRightString(A4[0] - MG_R - 22*mm, texto_y_cima,
+                               f"Processo: {D.get('processo','')}")
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#595959"))
+        canvas.drawRightString(A4[0] - MG_R - 22*mm, texto_y_baixo,
+                               f"Laudo: {D.get('data_laudo','')}")
+
+    # ── Linha separadora abaixo da logo ──
+    sep_y = header_bottom - 1
+    canvas.setStrokeColor(colors.HexColor("#005172"))
+    canvas.setLineWidth(0.8)
+    canvas.line(0, sep_y, A4[0], sep_y)
+
+    # ── Rodapé estilo Agi ──
+    y_rod = 9 * mm
+    canvas.setStrokeColor(colors.HexColor("#005172"))
+    canvas.setLineWidth(0.5)
+    canvas.line(MG_L, y_rod, A4[0]-MG_R, y_rod)
+    canvas.setFont("Helvetica", 7.5)
+    canvas.setFillColor(colors.black)
+    canvas.drawString(MG_L, y_rod-4*mm, "Este documento foi classificado como: Público.")
+    canvas.drawRightString(A4[0]-MG_R, y_rod-4*mm, f"Página {doc.page}")
+
+    canvas.restoreState()
+
+
+# ── Geração principal ──
+def gerar_pdf(D, caminho_saida):
+    # Normalizar campos essenciais
+    D.setdefault("data_dist",     D.get("dt_inclusao",""))
+    D.setdefault("autor",         D.get("nome_cliente",""))
+    D.setdefault("cpf",           D.get("nr_cpf_cnpj",""))
+    D.setdefault("endereco",      "")
+    D.setdefault("data_laudo",    datetime.today().strftime("%d/%m/%Y"))
+    D.setdefault("contratos",     [])
+    # Converter data YYYY-MM-DD → DD/MM/YYYY se necessário
+    dl = D.get("data_laudo","")
+    if dl and len(dl) == 10 and dl[4] == "-":
+        D["data_laudo"] = dl[8:10] + "/" + dl[5:7] + "/" + dl[0:4]
+
+    # Checar logo
+    logo_img = LOGO_PATH if os.path.exists(LOGO_PATH) else None
+
+    buf = io.BytesIO() if caminho_saida == "buffer" else None
+    doc = SimpleDocTemplate(
+        buf or caminho_saida,
+        pagesize=A4,
+        leftMargin=MG_L, rightMargin=MG_R,
+        topMargin=MG_T, bottomMargin=MG_B,
+        title=f"Laudo - {D.get('processo','')}",
+        author="SBK Legal Operations"
+    )
+
+    # Blocos de contratos em texto corrido
+    def blocos_contratos():
+        blks = []
+        for ct in D.get("contratos", []):
+            nr    = ct.get("nr","")
+            dt    = ct.get("dt","")
+            prod  = ct.get("prod","")
+            vl    = ct.get("vl","")
+            canal = ct.get("canal","")
+            txt = f"Contrato nº <b>{nr}</b> realizado em <b>{dt}</b>, produto {prod}"
+            if canal: txt += f", realizado por meio do canal {canal}"
+            txt += "."
+            blks.append(p(txt, ST_CORPO))
+        return blks if blks else [p("Nenhum contrato vinculado.", ST_CORPO)]
+
+    elementos = []
+
+    # ── Título principal ──
+    causa = str(D.get("causa_raiz","")).upper() or "ANÁLISE SISTÊMICA"
+    produto = str(D.get("produto","")).upper()
+    titulo_txt = f"PARECER SUBSÍDIOS – CONTENCIOSO – {causa}"
+    elementos.append(sp(2))
+    elementos.append(p(titulo_txt, ST_TITULO))
+    elementos.append(divisor())
+
+    # ── 1. Dados da ação ──
+    elementos.append(p("1. IDENTIFICAÇÃO DO CASO", ST_SECAO))
+    elementos.append(tbl_identificacao(D))
+    elementos.append(sp(4))
+
+    # ── 2. Contratos ──
+    elementos.append(p("2. CONTRATO(S) VINCULADO(S)", ST_SECAO))
+    elementos.extend(blocos_contratos())
+    elementos.append(divisor())
+
+    # ── 3. Resumo da inicial ──
+    elementos.append(p("3. RESUMO DA CAUSA", ST_SECAO))
+    resumo = str(D.get("resumo_causa",""))
+    elementos.append(p(resumo or "Não informado.", ST_CORPO))
+    elementos.append(divisor())
+
+    # ── 4. Checklist ──
+    elementos.append(p("4. CHECKLIST DE ANÁLISE", ST_SECAO))
+    elementos.append(p("<i>Respostas obtidas a partir da análise dos documentos e sistemas disponíveis:</i>", ST_ITALICO))
+    elementos.append(sp(1))
+    elementos.append(tbl_checklist(D))
+    elementos.append(sp(4))
+
+    # ── 5. Sistemas ──
+    elementos.append(p("5. SISTEMAS CONSULTADOS", ST_SECAO))
+    elementos.append(tbl_sistemas(D))
+    elementos.append(divisor())
+
+    # ── 6. Resultado final ──
+    elementos.append(p("6. RESULTADO FINAL", ST_SECAO))
+    elementos.append(tbl_resultado(D))
+    elementos.append(sp(3))
+
+    # ── Parecer (sem título de seção) ──
+    elementos.extend(gerar_parecer(D))
+    elementos.append(sp(4))
+
+    # ── 7. Anexos por aplicativo ──
+    NOMES_APP = {
+        "appsmith":"AppSmith","conductor":"Conductor","fraud":"Fraud Prevention",
+        "ged":"GED","matera":"Matera","recupera":"Recupera",
+        "salesforce":"Salesforce","biometria":"Unico Biometria",
+    }
+    anexos = D.get("anexos", {})
+    tem_anexo = any(v for v in anexos.values() if v)
+
+    if tem_anexo:
+        from reportlab.platypus import PageBreak
+        elementos.append(PageBreak())
+        import base64 as _b64, io as _io
+        from reportlab.platypus import Image as RLImage
+
+        elementos.append(divisor())
+        elementos.append(p("ANEXOS DO LAUDO", ST_TITULO))
+
+        for app_id, itens in anexos.items():
+            if not itens:
+                continue
+            nome_app = NOMES_APP.get(app_id, app_id.upper())
+            tem_img = any(i.get("tipo","").startswith("image/") for i in itens)
+            if not tem_img:
+                continue
+            elementos.append(p(nome_app, ST_SECAO))
+
+            for item in itens:
+                tipo  = item.get("tipo","")
+                nome  = item.get("nome","sem nome")
+                data  = item.get("data","")
+                if not data or not tipo.startswith("image/"):
+                    continue
+                try:
+                    b64  = data.split(",",1)[1] if "," in data else data
+                    raw  = _b64.b64decode(b64)
+                    from PIL import Image as PILImg
+                    pil  = PILImg.open(_io.BytesIO(raw))
+                    iw, ih = pil.size
+                    ratio  = min(W / iw, 160*mm / ih)
+                    dw, dh = iw * ratio, ih * ratio
+                    # Converter para RGB se necessário (PNG com canal alpha)
+                    if pil.mode in ("RGBA", "P"):
+                        fundo = PILImg.new("RGB", pil.size, (255,255,255))
+                        fundo.paste(pil, mask=pil.split()[3] if pil.mode == "RGBA" else None)
+                        pil = fundo
+                    # Salvar como JPEG em buffer novo
+                    img_buf = _io.BytesIO()
+                    pil.save(img_buf, format="JPEG", quality=90)
+                    img_buf.seek(0)
+                    elementos.append(p(nome, ParagraphStyle("fn", fontName="Helvetica-Oblique",
+                                       fontSize=8, textColor=C_CINZA_TXT)))
+                    elementos.append(RLImage(img_buf, width=dw, height=dh))
+                    elementos.append(sp(4))
+                except Exception as ex:
+                    elementos.append(p(f"Erro ao processar {nome}: {str(ex)}", ST_ITALICO))
+
+    # Build
+    def make_on_page(D_, logo_):
+        def fn(canvas, doc_obj):
+            on_page(canvas, doc_obj, D_, logo_)
+        return fn
+
+    cb = make_on_page(D, logo_img)
+    doc.build(elementos, onFirstPage=cb, onLaterPages=cb)
+
+    if buf:
+        return buf.getvalue()
+    return None
+
+
+# ── Entry point ──
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Uso: python3 gerar_laudo_pdf.py dados.json saida.pdf")
+        sys.exit(1)
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        dados = json.load(f)
+    gerar_pdf(dados, sys.argv[2])
+    print("OK")

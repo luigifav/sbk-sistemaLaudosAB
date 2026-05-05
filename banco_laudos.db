@@ -1,0 +1,5 @@
+anexos_laudos/
+__pycache__/
+*.pyc
+*.pyo
+.env

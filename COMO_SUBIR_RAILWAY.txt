@@ -1,0 +1,164 @@
+"""
+app.py — WSGI entrypoint para Vercel.
+Envolve o Handler de servidor.py em um callable WSGI sem dependências extras.
+"""
+
+import io
+import json
+import os
+import shutil
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# No Vercel o filesystem é read-only; copia o banco para /tmp para permitir escrita.
+_DIR = os.path.dirname(os.path.abspath(__file__))
+_SRC_DB = os.path.join(_DIR, "banco_laudos.db")
+_TMP_DB = "/tmp/banco_laudos.db"
+
+if os.environ.get("VERCEL") or not os.access(_DIR, os.W_OK):
+    if os.path.exists(_SRC_DB) and not os.path.exists(_TMP_DB):
+        shutil.copy2(_SRC_DB, _TMP_DB)
+    if os.path.exists(_TMP_DB):
+        os.environ["SQLITE_DB_PATH"] = _TMP_DB
+
+from servidor import Handler, criar_tabelas
+
+criar_tabelas()
+
+
+class _Buf(io.RawIOBase):
+    def __init__(self):
+        self._parts = []
+
+    def write(self, b):
+        self._parts.append(bytes(b))
+        return len(b)
+
+    def getvalue(self):
+        return b"".join(self._parts)
+
+
+class _Headers:
+    """Mapa de cabecalhos case-insensitive, compativel com BaseHTTPRequestHandler."""
+
+    def __init__(self, environ):
+        self._d = {}
+        for k, v in environ.items():
+            if k.startswith("HTTP_"):
+                self._d[k[5:].lower().replace("_", "-")] = v
+        for raw in ("content-length", "content-type"):
+            env_key = raw.upper().replace("-", "_")
+            if env_key in environ:
+                self._d[raw] = environ[env_key]
+
+    def get(self, key, default=None):
+        return self._d.get(key.lower(), default)
+
+    def __getitem__(self, key):
+        return self._d[key.lower()]
+
+    def __contains__(self, key):
+        return key.lower() in self._d
+
+
+_STATUS_TEXT = {
+    200: "200 OK",
+    201: "201 Created",
+    204: "204 No Content",
+    400: "400 Bad Request",
+    401: "401 Unauthorized",
+    403: "403 Forbidden",
+    404: "404 Not Found",
+    405: "405 Method Not Allowed",
+    409: "409 Conflict",
+    500: "500 Internal Server Error",
+}
+
+
+def _make_handler(environ, buf):
+    class _WSGIHandler(Handler):
+        _code = 200
+        _resp_headers = []
+
+        def send_response(self, code, message=None):
+            self._code = code
+
+        def send_header(self, key, value):
+            self._resp_headers.append((key, str(value)))
+
+        def end_headers(self):
+            pass
+
+        def send_error(self, code, message=None, explain=None):
+            self._code = code
+            body = json.dumps({"erro": message or str(code)}).encode()
+            self.wfile.write(body)
+            self._resp_headers = [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Access-Control-Allow-Origin", "*"),
+            ]
+
+        def log_message(self, fmt, *args):
+            pass
+
+    h = object.__new__(_WSGIHandler)
+    h._code = 200
+    h._resp_headers = []
+
+    raw_body = (environ.get("wsgi.input") or io.BytesIO()).read()
+    h.rfile = io.BytesIO(raw_body)
+    h.wfile = buf
+
+    path = environ.get("PATH_INFO", "/")
+    qs = environ.get("QUERY_STRING", "")
+    h.path = f"{path}?{qs}" if qs else path
+
+    h.headers = _Headers(environ)
+    h.command = environ.get("REQUEST_METHOD", "GET")
+    h.client_address = (environ.get("REMOTE_ADDR", "127.0.0.1"), 0)
+    h.server = None
+    h.request_version = "HTTP/1.1"
+
+    return h
+
+
+def app(environ, start_response):
+    buf = _Buf()
+    handler = _make_handler(environ, buf)
+    method = environ.get("REQUEST_METHOD", "GET").upper()
+
+    try:
+        dispatch = getattr(handler, f"do_{method}", None)
+        if dispatch:
+            dispatch()
+        else:
+            handler._code = 405
+            body = json.dumps({"erro": "Method not allowed"}).encode()
+            buf.write(body)
+            handler._resp_headers = [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Access-Control-Allow-Origin", "*"),
+            ]
+    except Exception as exc:
+        handler._code = 500
+        body = json.dumps({"erro": str(exc)}).encode()
+        buf = _Buf()
+        buf.write(body)
+        handler._resp_headers = [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Access-Control-Allow-Origin", "*"),
+        ]
+
+    response_body = buf.getvalue()
+
+    headers = [
+        (k, v)
+        for k, v in handler._resp_headers
+        if k.lower() != "content-length"
+    ]
+    headers.append(("Content-Length", str(len(response_body))))
+
+    status = _STATUS_TEXT.get(handler._code, f"{handler._code} Unknown")
+    start_response(status, headers)
+    return [response_body]

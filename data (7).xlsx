@@ -1,0 +1,86 @@
+COMO SUBIR NO RAILWAY
+======================
+
+PRÉ-REQUISITOS
+--------------
+- Conta no GitHub (gratuita): github.com
+- Conta no Railway (gratuita): railway.app
+
+PASSO 1 — Preparar os arquivos
+-------------------------------
+Na pasta SISTEMA LAUDO, certifique-se que estão presentes:
+  servidor.py
+  sistema_laudos_v2.html
+  gerar_laudo_pdf.py
+  logo_agibank.png
+  requirements.txt        ← novo
+  Procfile                ← novo
+  exportar_banco.py       ← novo
+  .gitignore              ← novo
+
+PASSO 2 — Subir para o GitHub
+-------------------------------
+1. Abra o PowerShell na pasta SISTEMA LAUDO
+2. Rode os comandos:
+
+   git init
+   git add .
+   git commit -m "Sistema de Laudos SBK"
+
+3. Acesse github.com e crie um repositório novo (privado)
+4. Siga as instruções do GitHub para conectar:
+
+   git remote add origin https://github.com/SEU_USUARIO/sistema-laudos.git
+   git push -u origin main
+
+PASSO 3 — Criar projeto no Railway
+------------------------------------
+1. Acesse railway.app e faça login com sua conta GitHub
+2. Clique em "New Project"
+3. Escolha "Deploy from GitHub repo"
+4. Selecione o repositório "sistema-laudos"
+5. Railway detecta Python automaticamente e faz o deploy
+
+PASSO 4 — Adicionar banco PostgreSQL
+--------------------------------------
+1. No painel do Railway, clique em "+ New"
+2. Escolha "Database" → "PostgreSQL"
+3. Railway cria o banco e conecta automaticamente ao projeto
+4. Vá em Variables e confirme que DATABASE_URL aparece
+
+PASSO 5 — Migrar os dados do banco local
+------------------------------------------
+1. No Railway, vá em PostgreSQL → Connect → copie o DATABASE_URL
+2. Na pasta SISTEMA LAUDO, rode:
+
+   python exportar_banco.py "postgresql://postgres:SENHA@HOST:5432/railway"
+
+   (cole o DATABASE_URL entre aspas)
+
+3. Aguarde a migração — pode demorar alguns minutos para 11.000+ processos
+
+PASSO 6 — Acessar o sistema
+-----------------------------
+1. No Railway, vá em seu projeto → Settings → Networking
+2. Clique em "Generate Domain"
+3. Railway cria um endereço tipo: sistema-laudos.up.railway.app
+4. Compartilhe esse endereço com o time
+
+PASSO 7 — Atualizar o sistema no futuro
+-----------------------------------------
+Sempre que fizer mudanças nos arquivos:
+
+   git add .
+   git commit -m "Descrição da mudança"
+   git push
+
+Railway faz o deploy automaticamente.
+
+DÚVIDAS
+--------
+- O plano gratuito do Railway inclui $5/mês de crédito
+- Para uso leve (equipe pequena) é suficiente
+- Anexos/prints ficam no servidor — o Railway tem disco efêmero,
+  então os prints precisam ser re-enviados após cada deploy.
+  Para persistir prints, uma evolução futura é usar armazenamento
+  em nuvem (S3 ou similar).
