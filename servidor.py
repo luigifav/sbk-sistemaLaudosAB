@@ -925,6 +925,21 @@ class Handler(BaseHTTPRequestHandler):
             "adv_agressor",
             "nome_cliente", "endereco", "analfabeto", "testemunhas",
             "subsidios_fav", "estrategia", "resultado_tipo", "observacoes",
+            # localização / contexto jurídico
+            "motivo_ajuizamento", "comarca", "estado", "fase", "natureza",
+            "filial", "advogado", "validacao_contrato", "validacao_obs",
+            # flags e métricas
+            "fl_ex_cliente", "fl_autor_contumaz", "qt_acoes",
+            "fl_cumprimento_sentenca", "fl_relevante",
+            "fl_falecido", "fl_adv_agressor", "duracao_meses", "qt_beneficio",
+            # pessoas / organização
+            "representante", "equipe", "motivo_relevancia", "categoria",
+            "orgao", "juizo", "polo", "situacao_externa",
+            "dt_encerramento", "motivo_encerramento",
+            "departamento", "divisao",
+            # valores editáveis pelo analista
+            "vl_causa", "vl_descontos", "vl_beneficio", "nr_beneficio",
+            "advogado_quarteirizado",
             # checklist
             "ck_bo", "ck_analfabeto", "ck_terceiros", "ck_primeira_tx",
             "ck_biometria_leg", "ck_biometria_ok", "ck_docs_ok", "ck_conta_agi",

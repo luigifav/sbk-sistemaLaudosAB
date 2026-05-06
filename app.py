@@ -619,11 +619,28 @@ def api_post_laudo(numero):
         "adv_agressor",
         "nome_cliente", "endereco", "analfabeto", "testemunhas",
         "subsidios_fav", "estrategia", "resultado_tipo", "observacoes",
+        # localização / contexto jurídico
+        "motivo_ajuizamento", "comarca", "estado", "fase", "natureza",
+        "filial", "advogado", "validacao_contrato", "validacao_obs",
+        # flags e métricas
+        "fl_ex_cliente", "fl_autor_contumaz", "qt_acoes",
+        "fl_cumprimento_sentenca", "fl_relevante",
+        "fl_falecido", "fl_adv_agressor", "duracao_meses", "qt_beneficio",
+        # pessoas / organização
+        "representante", "equipe", "motivo_relevancia", "categoria",
+        "orgao", "juizo", "polo", "situacao_externa",
+        "dt_encerramento", "motivo_encerramento",
+        "departamento", "divisao",
+        # valores editáveis pelo analista
+        "vl_causa", "vl_descontos", "vl_beneficio", "nr_beneficio",
+        "advogado_quarteirizado",
+        # checklist
         "ck_bo", "ck_analfabeto", "ck_terceiros", "ck_primeira_tx",
         "ck_biometria_leg", "ck_biometria_ok", "ck_docs_ok", "ck_conta_agi",
         "ck_compras", "ck_compras_anormais", "ck_ted", "ck_saque_cartao",
         "ck_uso_cartao", "ck_pagamento_fatura", "ck_valor_conta", "ck_spc",
         "ck_procuracao", "ck_comprov_end", "ck_outras_acoes", "ck_passagens",
+        # sistemas
         "appsmith_qtd", "conductor_qtd", "fraud_qtd", "ged_qtd",
         "matera_qtd", "recupera_qtd", "salesforce_qtd", "biometria_qtd",
     ]
