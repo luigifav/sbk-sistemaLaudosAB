@@ -64,14 +64,14 @@ if USE_POSTGRES:
                 sql_pg = sql_pg.rstrip().rstrip(";") + " RETURNING id"
             cur = self._conn.cursor()
             cur.execute(sql_pg, params or [])
-            cur.lastrowid = None
+            _lastrowid = None
             if sql_pg.strip().upper().startswith("INSERT"):
                 try:
                     row = cur.fetchone()
-                    cur.lastrowid = row["id"] if row else None
+                    _lastrowid = row["id"] if row else None
                 except Exception:
                     pass
-            return _PGCursor(cur)
+            return _PGCursor(cur, lastrowid=_lastrowid)
 
         def executescript(self, sql):
             cur = self._conn.cursor()
@@ -100,11 +100,13 @@ if USE_POSTGRES:
         def close(self):    self._conn.close()
 
     class _PGCursor:
-        def __init__(self, cur): self._cur = cur
+        def __init__(self, cur, lastrowid=None):
+            self._cur = cur
+            self._lastrowid = lastrowid
         @property
-        def lastrowid(self): return self._cur.lastrowid
+        def lastrowid(self): return self._lastrowid
         @lastrowid.setter
-        def lastrowid(self, v): self._cur.lastrowid = v
+        def lastrowid(self, v): self._lastrowid = v
         def fetchone(self):
             row = self._cur.fetchone()
             if row is None: return None
