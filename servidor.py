@@ -36,6 +36,22 @@ if USE_POSTGRES:
                     if dsn_ipv4 != dsn:
                         self._conn = psycopg2.connect(dsn_ipv4, cursor_factory=psycopg2.extras.RealDictCursor)
                     else:
+                        from urllib.parse import urlparse
+                        host = ""
+                        try:
+                            host = urlparse(dsn).hostname or ""
+                        except Exception:
+                            pass
+                        if host.startswith("db.") and host.endswith(".supabase.co"):
+                            raise psycopg2.OperationalError(
+                                "Falha ao conectar ao Postgres da Supabase pelo host direto "
+                                f"({host}). Esse endpoint só responde em IPv6 e o ambiente atual "
+                                "não tem rota IPv6. Troque o DATABASE_URL para a URL do "
+                                "Connection Pooler (Session ou Transaction) da Supabase, "
+                                "disponível em Project Settings > Database > Connection string. "
+                                "O host do pooler é aws-0-<regiao>.pooler.supabase.com:6543 "
+                                "e o usuario tem o formato postgres.<project-ref>."
+                            ) from e
                         raise
                 else:
                     raise
