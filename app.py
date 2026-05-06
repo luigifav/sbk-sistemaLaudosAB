@@ -474,6 +474,13 @@ def api_importar_casos():
     except ImportError:
         return json_response({"erro": "openpyxl nao instalado. Execute: pip install openpyxl"}, 500)
 
+    from mapa_colunas import MAPA_PLANILHA_PARA_BANCO, COLUNAS_SEM_CAMPO
+    from importar_excel import (
+        _limpar_monetario, _limpar_inteiro, _flag_simrao,
+        CAMPOS_MONETARIOS, CAMPOS_INTEIROS, CAMPOS_FLAG_SIMRAO, CAMPOS_ANALISTA,
+        MAPA_PROD_ARQ2,
+    )
+
     if "processos" not in request.files:
         return json_response({"erro": "Campo 'processos' obrigatorio"}, 400)
 
@@ -482,63 +489,160 @@ def api_importar_casos():
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
+        wb.close()
         if not rows:
             return [], []
-        headers = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
+        headers_orig = [str(h).strip() if h is not None else "" for h in rows[0]]
         result = []
         for row in rows[1:]:
             if all(v is None or str(v).strip() == "" for v in row):
                 continue
-            result.append(dict(zip(headers, [str(v).strip() if v is not None else "" for v in row])))
-        return headers, result
+            result.append(dict(zip(headers_orig, list(row))))
+        return headers_orig, result
+
+    def detectar_tipo(headers):
+        hl = {h.strip().lower() for h in headers}
+        if {"processo", "autor", "causa raiz"}.issubset(hl):
+            return "arquivo2"
+        if {"ds_produto_contratado", "valido"}.issubset(hl):
+            return "arquivo1"
+        return "basico"
 
     inseridos = 0
     atualizados = 0
     ignorados = 0
     log = []
+    campos_preenchidos_set: set = set()
+    tipo = "basico"
 
     conn = conectar()
     try:
-        _, rows_proc = parse_xlsx(request.files["processos"])
+        headers_proc, rows_proc = parse_xlsx(request.files["processos"])
+        tipo = detectar_tipo(headers_proc)
 
-        for row in rows_proc:
-            numero = row.get("processo", "").strip()
-            if not numero:
-                ignorados += 1
-                log.append("Linha ignorada: campo 'processo' vazio")
-                continue
+        if tipo == "arquivo2":
+            for row in rows_proc:
+                row_low = {k.strip().lower(): v for k, v in row.items()}
+                numero = str(row_low.get("processo", "") or "").strip()
+                if not numero:
+                    ignorados += 1
+                    continue
 
-            existing = conn.execute(
-                "SELECT id FROM processos WHERE processo = ?", [numero]
-            ).fetchone()
+                campos: dict = {}
+                for col_plan_orig, col_banco in MAPA_PROD_ARQ2.items():
+                    if col_banco == "processo":
+                        continue
+                    col_plan_low = col_plan_orig.strip().lower()
+                    if col_plan_low not in row_low:
+                        continue
+                    valor_raw = row_low[col_plan_low]
+                    if col_banco in CAMPOS_FLAG_SIMRAO:
+                        campos[col_banco] = _flag_simrao(valor_raw)
+                    elif col_banco in CAMPOS_MONETARIOS:
+                        campos[col_banco] = _limpar_monetario(valor_raw)
+                    elif col_banco in CAMPOS_INTEIROS:
+                        campos[col_banco] = _limpar_inteiro(valor_raw)
+                    else:
+                        v = str(valor_raw).strip() if valor_raw is not None else None
+                        campos[col_banco] = v if v and v not in ("None", "nan") else None
 
-            pasta = row.get("pasta", "")
-            cpf_cnpj = row.get("nr_cpf_cnpj", "") or row.get("cpf_cnpj", "") or row.get("cpf", "")
-            escritorio = row.get("nm_escritorio", "") or row.get("escritorio", "")
-            dt_inclusao = row.get("dt_inclusao", "") or row.get("data_inclusao", "") or row.get("data", "")
+                if not campos:
+                    ignorados += 1
+                    continue
 
-            if existing:
-                conn.execute(
-                    """UPDATE processos SET pasta=?, nr_cpf_cnpj=?, nm_escritorio=?,
-                       dt_inclusao=?, dt_atualizacao=? WHERE id=?""",
-                    [pasta, cpf_cnpj, escritorio, dt_inclusao, agora(), existing["id"]]
-                )
-                atualizados += 1
-                log.append(f"Atualizado: {numero}")
-            else:
-                conn.execute(
-                    """INSERT INTO processos
-                       (processo, pasta, nr_cpf_cnpj, nm_escritorio, dt_inclusao, status, dt_atualizacao)
-                       VALUES (?,?,?,?,?,?,?)""",
-                    [numero, pasta, cpf_cnpj, escritorio, dt_inclusao, "em_andamento", agora()]
-                )
-                inseridos += 1
-                log.append(f"Inserido: {numero}")
+                campos_preenchidos_set.update(k for k, v in campos.items() if v is not None)
+
+                existing = conn.execute(
+                    "SELECT id, resumo_causa FROM processos WHERE processo = ?", [numero]
+                ).fetchone()
+
+                if existing:
+                    resumo_preenchido = bool(
+                        existing["resumo_causa"] and str(existing["resumo_causa"]).strip()
+                    )
+                    campos_upd = (
+                        {k: v for k, v in campos.items() if k not in CAMPOS_ANALISTA}
+                        if resumo_preenchido else campos
+                    )
+                    if campos_upd:
+                        sets = ", ".join(f"{c}=?" for c in campos_upd)
+                        conn.execute(
+                            f"UPDATE processos SET {sets}, dt_atualizacao=? WHERE id=?",
+                            list(campos_upd.values()) + [agora(), existing["id"]]
+                        )
+                    atualizados += 1
+                    log.append(f"Atualizado: {numero}")
+                else:
+                    campos["status"] = "em_andamento"
+                    campos["dt_atualizacao"] = agora()
+                    cols = ", ".join(campos.keys())
+                    placeholders = ", ".join("?" * len(campos))
+                    conn.execute(
+                        f"INSERT INTO processos ({cols}) VALUES ({placeholders})",
+                        list(campos.values())
+                    )
+                    inseridos += 1
+                    log.append(f"Inserido: {numero}")
+
+        else:
+            for row in rows_proc:
+                row_low = {k.strip().lower(): v for k, v in row.items()}
+                numero = str(row_low.get("processo", "") or "").strip()
+                if not numero:
+                    ignorados += 1
+                    log.append("Linha ignorada: campo 'processo' vazio")
+                    continue
+
+                existing = conn.execute(
+                    "SELECT id FROM processos WHERE processo = ?", [numero]
+                ).fetchone()
+
+                pasta = str(
+                    row_low.get("pasta", "") or ""
+                ).strip()
+                cpf_cnpj = str(
+                    row_low.get("cpf do adverso", "")
+                    or row_low.get("nr_cpf_cnpj", "")
+                    or row_low.get("cpf_cnpj", "")
+                    or row_low.get("cpf", "")
+                    or ""
+                ).strip()
+                escritorio = str(
+                    row_low.get("escritorio", "")
+                    or row_low.get("nm_escritorio", "")
+                    or ""
+                ).strip()
+                dt_inclusao = str(
+                    row_low.get("data entrada", "")
+                    or row_low.get("dt_inclusao", "")
+                    or row_low.get("data_inclusao", "")
+                    or row_low.get("data", "")
+                    or ""
+                ).strip()
+
+                if existing:
+                    conn.execute(
+                        """UPDATE processos SET pasta=?, nr_cpf_cnpj=?, nm_escritorio=?,
+                           dt_inclusao=?, dt_atualizacao=? WHERE id=?""",
+                        [pasta, cpf_cnpj, escritorio, dt_inclusao, agora(), existing["id"]]
+                    )
+                    atualizados += 1
+                    log.append(f"Atualizado: {numero}")
+                else:
+                    conn.execute(
+                        """INSERT INTO processos
+                           (processo, pasta, nr_cpf_cnpj, nm_escritorio, dt_inclusao, status, dt_atualizacao)
+                           VALUES (?,?,?,?,?,?,?)""",
+                        [numero, pasta, cpf_cnpj, escritorio, dt_inclusao, "em_andamento", agora()]
+                    )
+                    inseridos += 1
+                    log.append(f"Inserido: {numero}")
 
         if "contratos" in request.files:
             _, rows_cont = parse_xlsx(request.files["contratos"])
             for row in rows_cont:
-                numero_cont = row.get("processo", "").strip()
+                row_low = {k.strip().lower(): v for k, v in row.items()}
+                numero_cont = str(row_low.get("processo", "") or "").strip()
                 if not numero_cont:
                     continue
                 proc_row = conn.execute(
@@ -547,18 +651,19 @@ def api_importar_casos():
                 if not proc_row:
                     log.append(f"Contrato ignorado: processo {numero_cont} nao encontrado")
                     continue
-                nr_cont = row.get("nr_contrato", "") or row.get("contrato", "")
-                ds_produto = row.get("ds_produto", "") or row.get("produto", "")
-                dt_cont = row.get("dt_contrato", "") or row.get("data_contrato", "")
-                vl_cont = row.get("vl_contrato", "") or row.get("valor", "")
-                canal = row.get("canal", "")
+                nr_cont = str(row_low.get("nr_contrato", "") or row_low.get("contrato", "") or "").strip()
+                ds_produto = str(row_low.get("ds_produto", "") or row_low.get("produto", "") or "").strip()
+                dt_cont = str(row_low.get("dt_contrato", "") or row_low.get("data_contrato", "") or "").strip()
+                vl_cont = str(row_low.get("vl_contrato", "") or row_low.get("valor", "") or "").strip()
+                canal = str(row_low.get("canal", "") or "").strip()
                 already = conn.execute(
                     "SELECT id FROM contratos WHERE processo_id=? AND nr_contrato=?",
                     [proc_row["id"], nr_cont]
                 ).fetchone()
                 if not already:
                     conn.execute(
-                        """INSERT INTO contratos (processo_id, nr_contrato, ds_produto, dt_contrato, vl_contrato, canal)
+                        """INSERT INTO contratos
+                           (processo_id, nr_contrato, ds_produto, dt_contrato, vl_contrato, canal)
                            VALUES (?,?,?,?,?,?)""",
                         [proc_row["id"], nr_cont, ds_produto, dt_cont, vl_cont, canal]
                     )
@@ -575,6 +680,8 @@ def api_importar_casos():
         "inseridos": inseridos,
         "atualizados": atualizados,
         "ignorados": ignorados,
+        "tipo_detectado": tipo,
+        "campos_preenchidos": sorted(campos_preenchidos_set),
         "log": log,
     })
 
