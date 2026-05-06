@@ -309,6 +309,22 @@ def criar_tabelas():
     for col in ck_cols:
         _try_exec(f"ALTER TABLE processos ADD COLUMN {col} TEXT")
     _try_exec("ALTER TABLE processos ADD COLUMN caminho_pdf TEXT")
+    # Migrations: campos mapeados em COLUNAS_SEM_CAMPO (mapa_colunas.py)
+    for col in [
+        "fl_ex_cliente TEXT", "fl_autor_contumaz TEXT", "qt_acoes INTEGER",
+        "fl_cumprimento_sentenca TEXT", "fl_relevante TEXT",
+        "fl_falecido INTEGER", "fl_adv_agressor INTEGER", "duracao_meses INTEGER",
+        "qt_beneficio INTEGER",
+        "representante TEXT", "equipe TEXT", "motivo_relevancia TEXT",
+        "incluido_por TEXT", "categoria TEXT", "orgao TEXT", "juizo TEXT",
+        "polo TEXT", "situacao_externa TEXT", "dt_encerramento TEXT",
+        "motivo_encerramento TEXT", "cc_benner TEXT", "departamento TEXT",
+        "divisao TEXT",
+        "vl_condenacao REAL", "vl_causa REAL", "vl_descontos REAL",
+        "vl_beneficio REAL",
+        "nr_beneficio TEXT", "advogado_quarteirizado TEXT",
+    ]:
+        _try_exec(f"ALTER TABLE processos ADD COLUMN {col}")
     # Criar usuário padrão se banco vazio.
     # ON CONFLICT DO NOTHING evita falha por corrida entre workers paralelos.
     import hashlib as _hl
