@@ -307,15 +307,22 @@ def criar_tabelas():
     for col in ck_cols:
         _try_exec(f"ALTER TABLE processos ADD COLUMN {col} TEXT")
     _try_exec("ALTER TABLE processos ADD COLUMN caminho_pdf TEXT")
-    # Criar usuário padrão se banco vazio
-    existing = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
-    if existing == 0:
-        import hashlib as _hl
+    # Criar usuário padrão se banco vazio.
+    # ON CONFLICT DO NOTHING evita falha por corrida entre workers paralelos.
+    import hashlib as _hl
+    _hash = _hl.sha256("1234".encode()).hexdigest()
+    try:
         conn.execute(
-            "INSERT INTO usuarios (login, nome, senha_hash, admin) VALUES (?,?,?,?)",
-            ["teste", "Teste", _hl.sha256("1234".encode()).hexdigest(), 1]
+            "INSERT INTO usuarios (login, nome, senha_hash, admin) "
+            "VALUES (?,?,?,?) ON CONFLICT (login) DO NOTHING",
+            ["teste", "Teste", _hash, 1]
         )
-    conn.commit()
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     conn.close()
     print(f"  Banco '{DB_ARQUIVO}' pronto.")
 
