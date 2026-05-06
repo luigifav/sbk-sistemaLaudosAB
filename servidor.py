@@ -81,8 +81,16 @@ if USE_POSTGRES:
                     # Adaptar schema SQLite → PostgreSQL
                     stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
                     stmt = stmt.replace("AUTOINCREMENT", "")
+                    stmt = stmt.replace(
+                        "DEFAULT (datetime('now','localtime'))",
+                        "DEFAULT CURRENT_TIMESTAMP",
+                    )
+                    stmt = re.sub(r"\bBLOB\b", "BYTEA", stmt)
                     try:
                         cur.execute(stmt)
+                        # Commit por statement para que falhas em statements
+                        # posteriores nao desfacam CREATEs ja bem sucedidos.
+                        self._conn.commit()
                     except Exception:
                         self._conn.rollback()
             return _PGCursor(cur)
@@ -256,35 +264,37 @@ def criar_tabelas():
         CREATE INDEX IF NOT EXISTS idx_processos_processo ON processos(processo);
         CREATE INDEX IF NOT EXISTS idx_contratos_proc     ON contratos(processo_id);
     """)
+    def _try_exec(sql):
+        # Em Postgres, qualquer erro em uma transacao a deixa abortada,
+        # exigindo rollback antes do proximo comando. Em SQLite o rollback
+        # tambem e seguro.
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
     # Migrations — adiciona colunas novas em bancos já existentes
     for col in ["autor TEXT", "dt_abertura TEXT", "adv_agressor TEXT", "motivo_ajuizamento TEXT",
                 "comarca TEXT", "estado TEXT", "fase TEXT", "natureza TEXT",
                 "filial TEXT", "advogado TEXT",
                 "validacao_contrato TEXT", "validacao_obs TEXT"]:
-        try:
-            conn.execute(f"ALTER TABLE processos ADD COLUMN {col}")
-        except Exception:
-            pass
-    try:
-        conn.execute("ALTER TABLE processos ADD COLUMN testemunhas TEXT")
-    except Exception:
-        pass
-    try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS anexos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+        _try_exec(f"ALTER TABLE processos ADD COLUMN {col}")
+    _try_exec("ALTER TABLE processos ADD COLUMN testemunhas TEXT")
+    _conteudo_t = "BYTEA" if USE_POSTGRES else "BLOB"
+    _id_t = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    _try_exec(f"""CREATE TABLE IF NOT EXISTS anexos (
+            id {_id_t},
             processo_id INTEGER NOT NULL REFERENCES processos(id) ON DELETE CASCADE,
             app_id TEXT NOT NULL, nome TEXT NOT NULL,
-            tipo TEXT, caminho TEXT NOT NULL, conteudo BLOB, dt_criacao TEXT
+            tipo TEXT, caminho TEXT NOT NULL, conteudo {_conteudo_t}, dt_criacao TEXT
         )""")
-    except Exception:
-        pass
     # Migration: adicionar coluna conteudo para bancos já existentes
     conteudo_col = "conteudo BYTEA" if USE_POSTGRES else "conteudo BLOB"
-    try:
-        conn.execute(f"ALTER TABLE anexos ADD COLUMN {conteudo_col}")
-        conn.commit()
-    except Exception:
-        pass
+    _try_exec(f"ALTER TABLE anexos ADD COLUMN {conteudo_col}")
     ck_cols = [
         "ck_bo","ck_analfabeto","ck_terceiros","ck_primeira_tx",
         "ck_biometria_leg","ck_biometria_ok","ck_docs_ok","ck_conta_agi",
@@ -295,14 +305,8 @@ def criar_tabelas():
         "matera_qtd","recupera_qtd","salesforce_qtd","biometria_qtd"
     ]
     for col in ck_cols:
-        try:
-            conn.execute(f"ALTER TABLE processos ADD COLUMN {col} TEXT")
-        except Exception:
-            pass
-    try:
-        conn.execute("ALTER TABLE processos ADD COLUMN caminho_pdf TEXT")
-    except Exception:
-        pass
+        _try_exec(f"ALTER TABLE processos ADD COLUMN {col} TEXT")
+    _try_exec("ALTER TABLE processos ADD COLUMN caminho_pdf TEXT")
     # Criar usuário padrão se banco vazio
     existing = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
     if existing == 0:
