@@ -939,6 +939,12 @@ textarea{min-height:100px;resize:vertical}
         <span style="font-size:12px;color:var(--texto3);margin-left:2px" id="fila-badge-info"></span>
       </div>
 
+      <!-- alertas automáticos gerados pelo preencherAutomatico -->
+      <div id="alertas-automaticos" style="display:none;flex-direction:column;gap:8px;margin-bottom:16px">
+        <div id="alerta-falecido" class="alerta-danger hidden">ATENÇÃO: autor falecido</div>
+        <div id="alerta-cumprimento" class="hidden" style="background:var(--amarelo-claro);border:1px solid #fde68a;border-radius:8px;padding:8px 14px;font-size:12px;color:#92400e;font-weight:600;display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#d97706;flex-shrink:0"></span>Cumprimento de sentença</div>
+      </div>
+
       <!-- PRODUTO -->
       <div id="produto" class="form-box">
         <div class="form-title">Tipo de Produto</div>
@@ -977,6 +983,11 @@ textarea{min-height:100px;resize:vertical}
               style="background:#f0f2f5;color:#555;cursor:not-allowed">
           </div>
           <div class="form-group">
+            <label>Filial</label>
+            <input id="inp-filial" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
             <label>Data do laudo</label>
             <input id="dataLaudo" type="date" readonly tabindex="-1"
               style="max-width:200px;background:#f0f2f5;color:#555;cursor:not-allowed">
@@ -991,6 +1002,81 @@ textarea{min-height:100px;resize:vertical}
           <div class="form-group full">
             <label>Causa Raiz</label>
             <input id="inp-causa-raiz" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Comarca</label>
+            <input id="inp-comarca" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Estado</label>
+            <input id="inp-estado" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Fase</label>
+            <input id="inp-fase" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Natureza</label>
+            <input id="inp-natureza" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Valor da causa</label>
+            <input id="inp-valor-causa" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Duração (meses)</label>
+            <input id="inp-duracao-meses" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group full">
+            <label>Motivo do Ajuizamento</label>
+            <input id="inp-motivo-ajuizamento" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Polo</label>
+            <input id="inp-polo" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Órgão</label>
+            <input id="inp-orgao" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group full">
+            <label>Juízo</label>
+            <input id="inp-juizo" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Encerramento</label>
+            <input id="inp-encerramento" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Motivo Encerramento</label>
+            <input id="inp-motivo-encerramento" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group full">
+            <label>Desfecho</label>
+            <input id="inp-desfecho" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Advogado do Autor</label>
+            <input id="inp-advogado-autor" readonly tabindex="-1"
+              style="background:#f0f2f5;color:#555;cursor:not-allowed">
+          </div>
+          <div class="form-group">
+            <label>Escritório</label>
+            <input id="inp-escritorio-autor" readonly tabindex="-1"
               style="background:#f0f2f5;color:#555;cursor:not-allowed">
           </div>
         </div>
@@ -1776,6 +1862,25 @@ function resetarLaudo(){
   if(est) est.value = '';
   const fb = document.getElementById('fila-badge-info');
   if(fb) fb.textContent = '';
+
+  // Limpar campos readonly novos (não cobertos pelo loop acima)
+  ['inp-filial','inp-comarca','inp-estado','inp-fase','inp-natureza',
+   'inp-valor-causa','inp-motivo-ajuizamento','inp-duracao-meses',
+   'inp-polo','inp-orgao','inp-juizo','inp-encerramento',
+   'inp-motivo-encerramento','inp-desfecho','inp-advogado-autor',
+   'inp-escritorio-autor'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+
+  // Ocultar alertas automáticos
+  const alertasWrap = document.getElementById('alertas-automaticos');
+  if(alertasWrap) alertasWrap.style.display = 'none';
+  ['alerta-falecido','alerta-cumprimento'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.classList.add('hidden');
+  });
+
   limparAnexos();
 }
 
@@ -1809,6 +1914,73 @@ async function preencherAutomatico(p){
   // ── Inf. do Processo ──
   _set('inp-causa-raiz',   p.causa_raiz);  // col M data(7) → Causa Raiz
   _set('produtoPrincipal', p.produto);     // col L data(7) → Produto principal
+
+  // ── Filial (Inf. Preliminares) ──
+  _set('inp-filial', p.filial);
+
+  // ── Novos campos readonly — Inf. do Processo ──
+  _set('inp-comarca',            p.comarca);
+  _set('inp-estado',             p.estado);
+  _set('inp-fase',               p.fase);
+  _set('inp-natureza',           p.natureza);
+  _set('inp-motivo-ajuizamento', p.motivo_ajuizamento);
+  _set('inp-duracao-meses',      p.soma_duracao_meses != null ? String(p.soma_duracao_meses) : (p.duracao_meses != null ? String(p.duracao_meses) : ''));
+  _set('inp-polo',               p.polo);
+  _set('inp-orgao',              p.orgao);
+  _set('inp-juizo',              p.juizo);
+  _set('inp-encerramento',       p.encerramento);
+  _set('inp-motivo-encerramento',p.motivo_encerramento);
+  _set('inp-desfecho',           p.desfecho);
+  _set('inp-advogado-autor',     p.advogado_autor);
+  _set('inp-escritorio-autor',   p.escritorio || p.nm_escritorio);
+
+  // Valor da causa — formatar como R$
+  if(p.valor_causa != null && p.valor_causa !== ''){
+    const num = parseFloat(String(p.valor_causa).replace(/[^\d,.-]/g,'').replace(',','.'));
+    if(!isNaN(num)){
+      _set('inp-valor-causa', num.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
+    } else {
+      _set('inp-valor-causa', String(p.valor_causa));
+    }
+  }
+
+  // ── Alertas automáticos ──
+  const alertasWrap = document.getElementById('alertas-automaticos');
+  const alertaFalecido    = document.getElementById('alerta-falecido');
+  const alertaCumprimento = document.getElementById('alerta-cumprimento');
+  let temAlerta = false;
+
+  if(alertaFalecido){
+    const falecido = String(p.fl_falecido || '').toLowerCase();
+    if(falecido === 'sim' || falecido === 'true' || falecido === '1'){
+      alertaFalecido.classList.remove('hidden');
+      temAlerta = true;
+    } else {
+      alertaFalecido.classList.add('hidden');
+    }
+  }
+
+  if(alertaCumprimento){
+    const cumpSent = String(p.cumprimento_sentenca || '').toLowerCase();
+    if(cumpSent === 'sim' || cumpSent === 'true' || cumpSent === '1'){
+      alertaCumprimento.classList.remove('hidden');
+      temAlerta = true;
+    } else {
+      alertaCumprimento.classList.add('hidden');
+    }
+  }
+
+  if(alertasWrap) alertasWrap.style.display = temAlerta ? 'flex' : 'none';
+
+  // ── Possui Subsídio → pré-selecionar subsidios_fav ──
+  const possuiSubsidio = String(p.possui_subsidio || '').toLowerCase();
+  if(possuiSubsidio === 'sim' || possuiSubsidio === 'true' || possuiSubsidio === '1'){
+    const selSubAuto = document.getElementById('subsidiFav');
+    if(selSubAuto && !selSubAuto.value){
+      selSubAuto.value = 'sim';
+      ajustarResultado();
+    }
+  }
 
   // Advogado agressor — pré-selecionar se vier do banco
   const selAdv = document.getElementById('sel-adv-agressor');
