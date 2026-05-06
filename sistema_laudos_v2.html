@@ -1925,23 +1925,24 @@ async function preencherAutomatico(p){
   _set('inp-fase',               p.fase);
   _set('inp-natureza',           p.natureza);
   _set('inp-motivo-ajuizamento', p.motivo_ajuizamento);
-  _set('inp-duracao-meses',      p.soma_duracao_meses != null ? String(p.soma_duracao_meses) : (p.duracao_meses != null ? String(p.duracao_meses) : ''));
+  _set('inp-duracao-meses',      p.duracao_meses != null ? String(p.duracao_meses) : '');
   _set('inp-polo',               p.polo);
   _set('inp-orgao',              p.orgao);
   _set('inp-juizo',              p.juizo);
-  _set('inp-encerramento',       p.encerramento);
+  _set('inp-encerramento',       p.dt_encerramento);
   _set('inp-motivo-encerramento',p.motivo_encerramento);
-  _set('inp-desfecho',           p.desfecho);
-  _set('inp-advogado-autor',     p.advogado_autor);
-  _set('inp-escritorio-autor',   p.escritorio || p.nm_escritorio);
+  _set('inp-desfecho',           p.resultado_tipo);
+  _set('inp-advogado-autor',     p.advogado);
+  _set('inp-escritorio-autor',   p.nm_escritorio);
 
   // Valor da causa — formatar como R$
-  if(p.valor_causa != null && p.valor_causa !== ''){
-    const num = parseFloat(String(p.valor_causa).replace(/[^\d,.-]/g,'').replace(',','.'));
+  const _vlCausa = p.vl_causa != null && p.vl_causa !== '' ? p.vl_causa : p.valor_causa;
+  if(_vlCausa != null && _vlCausa !== ''){
+    const num = parseFloat(String(_vlCausa).replace(/[^\d,.-]/g,'').replace(',','.'));
     if(!isNaN(num)){
       _set('inp-valor-causa', num.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
     } else {
-      _set('inp-valor-causa', String(p.valor_causa));
+      _set('inp-valor-causa', String(_vlCausa));
     }
   }
 
@@ -1962,7 +1963,7 @@ async function preencherAutomatico(p){
   }
 
   if(alertaCumprimento){
-    const cumpSent = String(p.cumprimento_sentenca || '').toLowerCase();
+    const cumpSent = String(p.fl_cumprimento_sentenca || p.cumprimento_sentenca || '').toLowerCase();
     if(cumpSent === 'sim' || cumpSent === 'true' || cumpSent === '1'){
       alertaCumprimento.classList.remove('hidden');
       temAlerta = true;
@@ -1974,7 +1975,7 @@ async function preencherAutomatico(p){
   if(alertasWrap) alertasWrap.style.display = temAlerta ? 'flex' : 'none';
 
   // ── Possui Subsídio → pré-selecionar subsidios_fav ──
-  const possuiSubsidio = String(p.possui_subsidio || '').toLowerCase();
+  const possuiSubsidio = String(p.subsidios_fav || p.possui_subsidio || '').toLowerCase();
   if(possuiSubsidio === 'sim' || possuiSubsidio === 'true' || possuiSubsidio === '1'){
     const selSubAuto = document.getElementById('subsidiFav');
     if(selSubAuto && !selSubAuto.value){
@@ -2051,12 +2052,16 @@ async function preencherAutomatico(p){
   if(p.subsidios_fav){
     const selSub = document.getElementById('subsidiFav');
     if(selSub){
-      selSub.value = p.subsidios_fav;
+      const _subVal = String(p.subsidios_fav).toLowerCase();
+      const _subNorm = (_subVal === 'sim' || _subVal === 'true' || _subVal === '1') ? 'sim'
+                     : (_subVal === 'não' || _subVal === 'nao' || _subVal === 'false' || _subVal === '0') ? 'nao'
+                     : '';
+      selSub.value = _subNorm;
       ajustarResultado();
       // Aguardar renderização e setar o tipo
       setTimeout(() => {
         if(p.resultado_tipo){
-          const fav = p.subsidios_fav === 'sim';
+          const fav = _subNorm === 'sim';
           const selFav  = document.getElementById('selFavoravel');
           const selDesf = document.getElementById('selDesfavoravel');
           const sel = fav ? selFav : selDesf;
